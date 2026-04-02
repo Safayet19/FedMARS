@@ -22,12 +22,17 @@ def select_layers_under_budget(
             return []
         return [max(global_credit.items(), key=lambda kv: kv[1])[0]]
 
-    costs = {name: max(1, int(round(layer_costs[name] * budget_scale))) for name in candidates}
+    total_cost = float(sum(float(layer_costs[name]) for name in candidates))
+    costs = {
+        name: max(1, int(round((float(layer_costs[name]) / total_cost) * budget_scale)))
+        for name in candidates
+    }
     values = {name: max(0.0, float(global_credit[name])) for name in candidates}
     capacity = max(1, int(round(float(budget_fraction) * budget_scale)))
 
     dp = np.zeros((len(candidates) + 1, capacity + 1), dtype=float)
     keep = np.zeros((len(candidates) + 1, capacity + 1), dtype=bool)
+
     for i, name in enumerate(candidates, start=1):
         cost = costs[name]
         value = values[name]
@@ -46,6 +51,7 @@ def select_layers_under_budget(
             name = candidates[i - 1]
             selected.append(name)
             c -= costs[name]
+
     selected = sorted(selected)
     if not selected and ensure_nonempty:
         selected = [max(candidates, key=lambda name: global_credit[name])]
