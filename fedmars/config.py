@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 
 @dataclass(slots=True)
 class ControllerConfig:
-    enabled: bool = True
+    enabled: bool = False
     budget_candidates: Tuple[float, ...] = (0.35, 0.50, 0.70, 1.00)
     threshold_candidates: Tuple[float, ...] = (-0.05, 0.00, 0.05)
     epsilon: float = 0.10
@@ -26,7 +26,7 @@ class AblationConfig:
     use_counterfactual_mixture: bool = True
     use_layer_credit: bool = True
     use_transfer_lr: bool = True
-    use_round_controller: bool = True
+    use_round_controller: bool = False
     use_depth_weight: bool = True
 
 
@@ -57,11 +57,11 @@ class FedMARSConfig:
     lambda_r: float = 1.0
     lambda_c: float = 1.0
 
-    eta_min: float = 0.10
-    eta_max: float = 1.00
-    mu_min: float = 0.00
-    mu_max: float = 0.50
-    alpha_credit: float = 4.0
+    eta_min: float = 0.7
+    eta_max: float = 1.0
+    mu_max: float = 0.05
+    alpha_credit: float = 0.5
+    kappa_transfer: float = 1.0
 
     rho_min: float = 0.001
     rho_max: float = 0.050

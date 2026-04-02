@@ -5,7 +5,6 @@ from typing import Mapping, Sequence
 import numpy as np
 import torch
 
-
 def select_layers_under_budget(
     global_credit: Mapping[str, float],
     layer_costs: Mapping[str, float],
@@ -51,7 +50,6 @@ def select_layers_under_budget(
     if not selected and ensure_nonempty:
         selected = [max(candidates, key=lambda name: global_credit[name])]
     return selected
-
 
 def aggregate_sparse_updates(
     sparse_updates: Sequence[Mapping[str, Mapping[str, torch.Tensor]]],
