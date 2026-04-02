@@ -35,9 +35,9 @@ class FedMARSConfig:
     random_state: int = 42
     device: str = "cpu"
 
-    num_rounds: int = 80
+    num_rounds: int = 100
     warmup_rounds: int = 10
-    positive_pair_rounds: int = 20
+    positive_pair_rounds: int = 30
 
     client_fraction: float = 1.0
     min_clients_per_round: int = 5
@@ -62,15 +62,15 @@ class FedMARSConfig:
     lambda_r: float = 1.0
     lambda_c: float = 1.0
 
-    eta_min: float = 0.7
-    eta_max: float = 1.0
-    mu_min: float = 0.0
-    mu_max: float = 0.03
-    alpha_credit: float = 0.35
+    eta_min: float = 0.75
+    eta_max: float = 1.00
+    mu_min: float = 0.00
+    mu_max: float = 0.02
+    alpha_credit: float = 0.30
 
     rho_min: float = 0.001
-    rho_max: float = 0.015
-    kappa_transfer: float = 0.7
+    rho_max: float = 0.012
+    kappa_transfer: float = 0.60
     tau_transfer: float = 0.30
     probe_batch_size: int = 64
 

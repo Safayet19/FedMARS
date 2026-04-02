@@ -7,15 +7,40 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from .aggregation import aggregate_sparse_updates, apply_global_update, select_layers_under_budget
+from .aggregation import (
+    aggregate_sparse_updates,
+    apply_global_update,
+    select_layers_under_budget,
+    select_top_positive_under_budget,
+)
 from .config import FedMARSConfig
 from .controller import AdaptiveRoundController, ControllerAction, RoundState
 from .credit import aggregate_global_credit, build_reference_sketch, compute_layer_credit
 from .data import ClientDataset, infer_client_weights
-from .layers import LayerSpec, build_layer_specs, compute_depth_weights, compute_layer_costs, flatten_grads_from_model, flatten_params_from_state, layer_name_to_spec, state_delta_by_layer
+from .layers import (
+    LayerSpec,
+    build_layer_specs,
+    compute_depth_weights,
+    compute_layer_costs,
+    flatten_grads_from_model,
+    flatten_params_from_state,
+    layer_name_to_spec,
+    state_delta_by_layer,
+)
 from .mixture import select_counterfactual_mixture
 from .partition import build_local_modes, sample_batch_from_indices, sample_probe_batches
-from .utils import clone_model, detach_state_dict, evaluate_classifier, load_state_dict_, mean_or_zero, move_batch_to_device, safe_cosine, set_seed, sigmoid, unpack_batch
+from .utils import (
+    clone_model,
+    detach_state_dict,
+    evaluate_classifier,
+    load_state_dict_,
+    mean_or_zero,
+    move_batch_to_device,
+    safe_cosine,
+    set_seed,
+    sigmoid,
+    unpack_batch,
+)
 
 
 class FedMARS:
@@ -41,7 +66,11 @@ class FedMARS:
         picked = rng.choice(np.arange(num_clients), size=choose, replace=False)
         return [clients[int(i)] for i in picked.tolist()]
 
-    def _previous_movement_by_layer(self, current_state: Mapping[str, torch.Tensor], previous_state: Mapping[str, torch.Tensor] | None) -> dict[str, torch.Tensor | None]:
+    def _previous_movement_by_layer(
+        self,
+        current_state: Mapping[str, torch.Tensor],
+        previous_state: Mapping[str, torch.Tensor] | None,
+    ) -> dict[str, torch.Tensor | None]:
         out: dict[str, torch.Tensor | None] = {}
         if previous_state is None:
             for spec in self.layer_specs:
@@ -63,7 +92,12 @@ class FedMARS:
         loss.backward()
         return {spec.name: flatten_grads_from_model(model, spec).detach().cpu() for spec in self.layer_specs}
 
-    def _compute_transfer_scores(self, client: ClientDataset, global_state: Mapping[str, torch.Tensor], round_seed: int) -> dict[str, float]:
+    def _compute_transfer_scores(
+        self,
+        client: ClientDataset,
+        global_state: Mapping[str, torch.Tensor],
+        round_seed: int,
+    ) -> dict[str, float]:
         probe1, probe2 = sample_probe_batches(client.dataset, self.config.probe_batch_size, seed=round_seed)
         probe_model = clone_model(self.model, self.device)
         load_state_dict_(probe_model, global_state)
@@ -81,7 +115,13 @@ class FedMARS:
             * sigmoid(self.config.kappa_transfer * (transfer_score - self.config.tau_transfer))
         )
 
-    def _phase_a_client_credit(self, client: ClientDataset, global_state: Mapping[str, torch.Tensor], ref_sketches: Mapping[str, torch.Tensor | None], round_idx: int) -> tuple[dict[str, float], dict[str, dict[str, Any]]]:
+    def _phase_a_client_credit(
+        self,
+        client: ClientDataset,
+        global_state: Mapping[str, torch.Tensor],
+        ref_sketches: Mapping[str, torch.Tensor | None],
+        round_idx: int,
+    ) -> tuple[dict[str, float], dict[str, dict[str, Any]]]:
         if self.config.ablations.use_multimodal_partition:
             groups = build_local_modes(
                 dataset=client.dataset,
@@ -112,7 +152,12 @@ class FedMARS:
             grads = [cg[spec.name] for cg in cluster_grads]
             reference = ref_sketches.get(spec.name) if self.config.ablations.use_reference_sketch else None
             if self.config.ablations.use_counterfactual_mixture:
-                weights, mixed, conflict, objective = select_counterfactual_mixture(grads, reference, self.config.mixture_conflict_beta, self.config.mixture_resolution)
+                weights, mixed, conflict, objective = select_counterfactual_mixture(
+                    grads,
+                    reference,
+                    self.config.mixture_conflict_beta,
+                    self.config.mixture_resolution,
+                )
             else:
                 weights = np.ones(len(grads), dtype=float) / max(len(grads), 1)
                 mixed = sum(grads) / max(len(grads), 1)
@@ -138,13 +183,26 @@ class FedMARS:
             }
         return credits, details
 
-    def _phase_b_client_update(self, client: ClientDataset, global_state: Mapping[str, torch.Tensor], selected_layers: Sequence[str], proximal_strengths: Mapping[str, float], round_idx: int) -> tuple[dict[str, dict[str, torch.Tensor]], dict[str, float], dict[str, float]]:
+    def _phase_b_client_update(
+        self,
+        client: ClientDataset,
+        global_state: Mapping[str, torch.Tensor],
+        selected_layers: Sequence[str],
+        proximal_strengths: Mapping[str, float],
+        round_idx: int,
+    ) -> tuple[dict[str, dict[str, torch.Tensor]], dict[str, float], dict[str, float]]:
         local_model = clone_model(self.model, self.device)
         load_state_dict_(local_model, global_state)
         named_params = dict(local_model.named_parameters())
         transfer_scores = self._compute_transfer_scores(client, global_state, round_seed=self.config.random_state + 30000 + round_idx)
         layer_lrs = {name: self._map_transfer_to_lr(score) for name, score in transfer_scores.items()}
-        loader = DataLoader(client.dataset, batch_size=self.config.local_batch_size, shuffle=True, num_workers=self.config.num_workers, pin_memory=self.config.pin_memory)
+        loader = DataLoader(
+            client.dataset,
+            batch_size=self.config.local_batch_size,
+            shuffle=True,
+            num_workers=self.config.num_workers,
+            pin_memory=self.config.pin_memory,
+        )
         global_ref = {k: v.detach().clone().to(self.device) for k, v in global_state.items()}
         local_model.train()
         for _ in range(self.config.local_epochs):
@@ -169,7 +227,12 @@ class FedMARS:
         sparse = {name: deltas[name] for name in set(selected_layers) if name in deltas}
         return sparse, transfer_scores, layer_lrs
 
-    def fit(self, clients: Sequence[ClientDataset], server_val_loader: DataLoader | None = None, server_test_loader: DataLoader | None = None) -> dict[str, Any]:
+    def fit(
+        self,
+        clients: Sequence[ClientDataset],
+        server_val_loader: DataLoader | None = None,
+        server_test_loader: DataLoader | None = None,
+    ) -> dict[str, Any]:
         if len(clients) == 0:
             raise ValueError("At least one client dataset is required.")
         client_weight_map = infer_client_weights(clients)
@@ -183,12 +246,19 @@ class FedMARS:
             sampled_clients = self._sample_clients(clients, round_idx)
             global_state = detach_state_dict(self.model)
             prev_movement = self._previous_movement_by_layer(global_state, previous_global_state)
-            ref_sketches = {name: build_reference_sketch(vec, mode=self.config.reference_sketch_mode) for name, vec in prev_movement.items()}
+            ref_sketches = {
+                name: build_reference_sketch(vec, mode=self.config.reference_sketch_mode)
+                for name, vec in prev_movement.items()
+            }
 
             if self.config.ablations.use_round_controller and self.config.controller.enabled:
                 action = self.controller.choose(previous_state)
             else:
-                action = ControllerAction(self.config.default_budget_fraction, self.config.default_threshold, -1)
+                action = ControllerAction(
+                    self.config.default_budget_fraction,
+                    self.config.default_threshold,
+                    -1,
+                )
 
             client_credit_dicts = []
             client_credit_details = {}
@@ -197,18 +267,33 @@ class FedMARS:
                 client_credit_dicts.append(credits)
                 client_credit_details[str(client.client_id)] = details
 
-            global_credit = aggregate_global_credit(client_credit_dicts, [spec.name for spec in self.layer_specs])
-
-            positive_sorted = sorted(
-                [name for name, score in global_credit.items() if float(score) > 0.0],
-                key=lambda name: float(global_credit[name]),
-                reverse=True,
+            global_credit = aggregate_global_credit(
+                client_credit_dicts,
+                [spec.name for spec in self.layer_specs],
             )
 
             if round_idx < self.config.warmup_rounds:
                 selected_layers = [spec.name for spec in self.layer_specs]
-            elif round_idx < self.config.warmup_rounds + self.config.positive_pair_rounds and len(positive_sorted) >= 2:
-                selected_layers = sorted(positive_sorted[:2])
+            elif round_idx < self.config.warmup_rounds + self.config.positive_pair_rounds:
+                pair = select_top_positive_under_budget(
+                    global_credit,
+                    self.layer_costs,
+                    action.budget_fraction,
+                    action.threshold,
+                    top_k=2,
+                    budget_scale=self.config.budget_scale,
+                )
+                if len(pair) >= 2:
+                    selected_layers = pair
+                else:
+                    selected_layers = select_layers_under_budget(
+                        global_credit,
+                        self.layer_costs,
+                        action.budget_fraction,
+                        action.threshold,
+                        budget_scale=self.config.budget_scale,
+                        ensure_nonempty=self.config.ensure_nonempty_gate,
+                    )
             else:
                 selected_layers = select_layers_under_budget(
                     global_credit,
