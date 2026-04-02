@@ -5,6 +5,7 @@ from typing import Mapping, Sequence
 import numpy as np
 import torch
 
+
 def select_layers_under_budget(
     global_credit: Mapping[str, float],
     layer_costs: Mapping[str, float],
@@ -22,13 +23,24 @@ def select_layers_under_budget(
             return []
         return [max(global_credit.items(), key=lambda kv: kv[1])[0]]
 
+    if float(budget_fraction) >= 0.999:
+        return sorted(candidates)
+
     total_cost = float(sum(float(layer_costs[name]) for name in candidates))
+    if total_cost <= 0.0:
+        if not ensure_nonempty:
+            return []
+        return [max(candidates, key=lambda name: global_credit[name])]
+
     costs = {
         name: max(1, int(round((float(layer_costs[name]) / total_cost) * budget_scale)))
         for name in candidates
     }
     values = {name: max(0.0, float(global_credit[name])) for name in candidates}
     capacity = max(1, int(round(float(budget_fraction) * budget_scale)))
+
+    if capacity >= sum(costs.values()):
+        return sorted(candidates)
 
     dp = np.zeros((len(candidates) + 1, capacity + 1), dtype=float)
     keep = np.zeros((len(candidates) + 1, capacity + 1), dtype=bool)
@@ -56,6 +68,7 @@ def select_layers_under_budget(
     if not selected and ensure_nonempty:
         selected = [max(candidates, key=lambda name: global_credit[name])]
     return selected
+
 
 def aggregate_sparse_updates(
     sparse_updates: Sequence[Mapping[str, Mapping[str, torch.Tensor]]],

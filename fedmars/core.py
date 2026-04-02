@@ -198,16 +198,48 @@ class FedMARS:
                 client_credit_details[str(client.client_id)] = details
 
             global_credit = aggregate_global_credit(client_credit_dicts, [spec.name for spec in self.layer_specs])
-            selected_layers = select_layers_under_budget(global_credit, self.layer_costs, action.budget_fraction, action.threshold, budget_scale=self.config.budget_scale, ensure_nonempty=self.config.ensure_nonempty_gate)
-            layer_steps = {spec.name: float(self.config.eta_min + (self.config.eta_max - self.config.eta_min) * sigmoid(self.config.alpha_credit * global_credit[spec.name])) for spec in self.layer_specs}
-            proximal_strengths = {spec.name: float(self.config.mu_min + (self.config.mu_max - self.config.mu_min) * sigmoid(-self.config.alpha_credit * global_credit[spec.name])) for spec in self.layer_specs}
+
+            if round_idx < self.config.warmup_rounds:
+                selected_layers = [spec.name for spec in self.layer_specs]
+            else:
+                selected_layers = select_layers_under_budget(
+                    global_credit,
+                    self.layer_costs,
+                    action.budget_fraction,
+                    action.threshold,
+                    budget_scale=self.config.budget_scale,
+                    ensure_nonempty=self.config.ensure_nonempty_gate,
+                )
+
+            layer_steps = {
+                spec.name: float(
+                    self.config.eta_min
+                    + (self.config.eta_max - self.config.eta_min)
+                    * sigmoid(self.config.alpha_credit * global_credit[spec.name])
+                )
+                for spec in self.layer_specs
+            }
+            proximal_strengths = {
+                spec.name: float(
+                    self.config.mu_min
+                    + (self.config.mu_max - self.config.mu_min)
+                    * sigmoid(-self.config.alpha_credit * global_credit[spec.name])
+                )
+                for spec in self.layer_specs
+            }
 
             client_updates = []
             client_weights = []
             client_transfer = {}
             client_lrs = {}
             for client in sampled_clients:
-                sparse_update, transfer_scores, layer_lrs = self._phase_b_client_update(client, global_state, selected_layers, proximal_strengths, round_idx)
+                sparse_update, transfer_scores, layer_lrs = self._phase_b_client_update(
+                    client,
+                    global_state,
+                    selected_layers,
+                    proximal_strengths,
+                    round_idx,
+                )
                 client_updates.append(sparse_update)
                 client_weights.append(client_weight_map[client.client_id])
                 client_transfer[str(client.client_id)] = transfer_scores
@@ -236,7 +268,12 @@ class FedMARS:
             else:
                 reward = validation_delta - self.config.controller.reward_comm_penalty * comm_ratio - self.config.controller.reward_drift_penalty * drift
 
-            previous_state = RoundState(drift=drift, communication_ratio=comm_ratio, validation_delta=validation_delta, credit_mean=mean_or_zero(list(global_credit.values())))
+            previous_state = RoundState(
+                drift=drift,
+                communication_ratio=comm_ratio,
+                validation_delta=validation_delta,
+                credit_mean=mean_or_zero(list(global_credit.values())),
+            )
             previous_global_state = global_state
 
             round_log = {

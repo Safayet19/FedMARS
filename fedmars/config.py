@@ -34,17 +34,20 @@ class AblationConfig:
 class FedMARSConfig:
     random_state: int = 42
     device: str = "cpu"
-    num_rounds: int = 20
+
+    num_rounds: int = 50
+    warmup_rounds: int = 5
     client_fraction: float = 1.0
-    min_clients_per_round: int = 1
-    local_epochs: int = 1
+    min_clients_per_round: int = 5
+
+    local_epochs: int = 2
     local_batch_size: int = 32
     num_workers: int = 0
     pin_memory: bool = False
     max_grad_norm: Optional[float] = None
 
     num_clusters: int = 3
-    partition_method: str = "kmeans"  # kmeans | label | random | single
+    partition_method: str = "kmeans"
     cluster_refresh_interval: int = 1
     max_partition_samples: int = 512
     min_examples_for_multimodal: int = 24
@@ -59,27 +62,21 @@ class FedMARSConfig:
 
     eta_min: float = 0.7
     eta_max: float = 1.0
+    mu_min: float = 0.0
     mu_max: float = 0.05
     alpha_credit: float = 0.5
-    kappa_transfer: float = 1.0
-    rho_max: float = 0.01
-    num_rounds: int = 50
-    probe_batch_size: int = 32
-    default_budget_fraction: float = 1.0
-    default_threshold: float = -0.05
 
     rho_min: float = 0.001
-    rho_max: float = 0.050
-    kappa_transfer: float = 6.0
+    rho_max: float = 0.01
+    kappa_transfer: float = 1.0
     tau_transfer: float = 0.30
-    probe_batch_size: int = 16
+    probe_batch_size: int = 32
 
     aggregation: str = "weighted_mean"
     ensure_nonempty_gate: bool = True
     budget_scale: int = 200
-
     default_budget_fraction: float = 1.0
-    default_threshold: float = -1e9
+    default_threshold: float = -0.05
 
     controller: ControllerConfig = field(default_factory=ControllerConfig)
     ablations: AblationConfig = field(default_factory=AblationConfig)
