@@ -23,10 +23,6 @@ def select_layers_under_budget(
             return []
         return [max(global_credit.items(), key=lambda kv: kv[1])[0]]
 
-    positive = [name for name in candidates if float(global_credit[name]) > 0.0]
-    if 0 < len(positive) <= 2:
-        return sorted(positive)
-
     if float(budget_fraction) >= 0.999:
         return sorted(candidates)
 

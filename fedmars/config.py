@@ -37,6 +37,8 @@ class FedMARSConfig:
 
     num_rounds: int = 80
     warmup_rounds: int = 10
+    positive_pair_rounds: int = 20
+
     client_fraction: float = 1.0
     min_clients_per_round: int = 5
 

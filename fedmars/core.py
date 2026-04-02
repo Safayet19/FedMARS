@@ -199,8 +199,16 @@ class FedMARS:
 
             global_credit = aggregate_global_credit(client_credit_dicts, [spec.name for spec in self.layer_specs])
 
+            positive_sorted = sorted(
+                [name for name, score in global_credit.items() if float(score) > 0.0],
+                key=lambda name: float(global_credit[name]),
+                reverse=True,
+            )
+
             if round_idx < self.config.warmup_rounds:
                 selected_layers = [spec.name for spec in self.layer_specs]
+            elif round_idx < self.config.warmup_rounds + self.config.positive_pair_rounds and len(positive_sorted) >= 2:
+                selected_layers = sorted(positive_sorted[:2])
             else:
                 selected_layers = select_layers_under_budget(
                     global_credit,
