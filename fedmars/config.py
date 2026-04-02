@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 class ControllerConfig:
     enabled: bool = False
     budget_candidates: Tuple[float, ...] = (0.35, 0.50, 0.70, 1.00)
-    threshold_candidates: Tuple[float, ...] = (-0.05, 0.00, 0.05)
+    threshold_candidates: Tuple[float, ...] = (-0.10, -0.05, 0.00)
     epsilon: float = 0.10
     step_size: float = 0.25
     drift_bins: Tuple[float, ...] = (0.02, 0.10, 0.30)
@@ -35,12 +35,12 @@ class FedMARSConfig:
     random_state: int = 42
     device: str = "cpu"
 
-    num_rounds: int = 50
-    warmup_rounds: int = 5
+    num_rounds: int = 80
+    warmup_rounds: int = 10
     client_fraction: float = 1.0
     min_clients_per_round: int = 5
 
-    local_epochs: int = 2
+    local_epochs: int = 3
     local_batch_size: int = 32
     num_workers: int = 0
     pin_memory: bool = False
@@ -63,20 +63,20 @@ class FedMARSConfig:
     eta_min: float = 0.7
     eta_max: float = 1.0
     mu_min: float = 0.0
-    mu_max: float = 0.05
-    alpha_credit: float = 0.5
+    mu_max: float = 0.03
+    alpha_credit: float = 0.35
 
     rho_min: float = 0.001
-    rho_max: float = 0.01
-    kappa_transfer: float = 1.0
+    rho_max: float = 0.015
+    kappa_transfer: float = 0.7
     tau_transfer: float = 0.30
-    probe_batch_size: int = 32
+    probe_batch_size: int = 64
 
     aggregation: str = "weighted_mean"
     ensure_nonempty_gate: bool = True
     budget_scale: int = 200
     default_budget_fraction: float = 1.0
-    default_threshold: float = -0.05
+    default_threshold: float = -0.10
 
     controller: ControllerConfig = field(default_factory=ControllerConfig)
     ablations: AblationConfig = field(default_factory=AblationConfig)
