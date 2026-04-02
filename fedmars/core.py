@@ -29,7 +29,6 @@ from .utils import (
     detach_state_dict,
     evaluate_classifier,
     load_state_dict_,
-    mean_or_zero,
     move_batch_to_device,
     safe_cosine,
     set_seed,
@@ -38,12 +37,33 @@ from .utils import (
 )
 
 
+def _stable_client_seed(value: int | str) -> int:
+    s = str(value)
+    return sum((i + 1) * ord(ch) for i, ch in enumerate(s)) % 1000003
+
+
+def _mean_or_zero(values: Sequence[float]) -> float:
+    if not values:
+        return 0.0
+    return float(sum(values) / len(values))
+
+
 class FedMARS:
-    def __init__(self, model: torch.nn.Module, config: FedMARSConfig | None = None, criterion: torch.nn.Module | None = None):
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        config: FedMARSConfig | None = None,
+        criterion: torch.nn.Module | None = None,
+    ):
         self.config = config if config is not None else FedMARSConfig()
         self.device = torch.device(self.config.device)
         self.model = model.to(self.device)
-        self.criterion = criterion if criterion is not None else torch.nn.CrossEntropyLoss(label_smoothing=self.config.label_smoothing)
+        self.criterion = (
+            criterion
+            if criterion is not None
+            else torch.nn.CrossEntropyLoss(label_smoothing=self.config.label_smoothing)
+        )
+
         set_seed(self.config.random_state)
 
         self.layer_specs: list[LayerSpec] = build_layer_specs(self.model)
@@ -52,9 +72,13 @@ class FedMARS:
         self.layer_costs = compute_layer_costs(self.layer_specs)
         self.controller = AdaptiveRoundController(self.config.controller, seed=self.config.random_state)
 
+        named_params = dict(self.model.named_parameters())
         self.ref_memory: dict[str, torch.Tensor | None] = {spec.name: None for spec in self.layer_specs}
         self.server_velocity: dict[str, dict[str, torch.Tensor]] = {
-            spec.name: {pname: torch.zeros_like(dict(self.model.named_parameters())[pname]).detach().clone().cpu() for pname in spec.param_names}
+            spec.name: {
+                pname: torch.zeros_like(named_params[pname]).detach().clone().cpu()
+                for pname in spec.param_names
+            }
             for spec in self.layer_specs
         }
 
@@ -74,17 +98,22 @@ class FedMARS:
         previous_state: Mapping[str, torch.Tensor] | None,
     ) -> dict[str, torch.Tensor | None]:
         refs: dict[str, torch.Tensor | None] = {}
+
         if previous_state is None:
-            return {spec.name: None for spec in self.layer_specs}
+            refs = {spec.name: None for spec in self.layer_specs}
+            self.ref_memory = {spec.name: None for spec in self.layer_specs}
+            return refs
 
         for spec in self.layer_specs:
             cur = flatten_params_from_state(current_state, spec)
             prev = flatten_params_from_state(previous_state, spec)
             raw_delta = cur - prev
+
             unit = build_reference_sketch(raw_delta, mode=self.config.reference_sketch_mode)
             if unit is None:
                 refs[spec.name] = self.ref_memory[spec.name]
                 continue
+
             if self.config.reference_sketch_mode == "ema_unit":
                 prev_ref = self.ref_memory[spec.name]
                 if prev_ref is None:
@@ -116,11 +145,14 @@ class FedMARS:
         round_seed: int,
     ) -> dict[str, float]:
         probe1, probe2 = sample_probe_batches(client.dataset, self.config.probe_batch_size, seed=round_seed)
+
         probe_model = clone_model(self.model, self.device)
         load_state_dict_(probe_model, global_state)
         grads1 = self._compute_batch_layer_grads(probe_model, probe1)
+
         load_state_dict_(probe_model, global_state)
         grads2 = self._compute_batch_layer_grads(probe_model, probe2)
+
         return {spec.name: safe_cosine(grads1[spec.name], grads2[spec.name]) for spec in self.layer_specs}
 
     def _map_transfer_to_lr(self, transfer_score: float) -> float:
@@ -139,12 +171,14 @@ class FedMARS:
         ref_sketches: Mapping[str, torch.Tensor | None],
         round_idx: int,
     ) -> tuple[dict[str, float], dict[str, dict[str, Any]]]:
+        client_seed = _stable_client_seed(client.client_id)
+
         if self.config.ablations.use_multimodal_partition:
             groups = build_local_modes(
                 dataset=client.dataset,
                 num_clusters=self.config.num_clusters,
                 method=self.config.partition_method,
-                seed=self.config.random_state + round_idx * 1000 + int(hash(str(client.client_id)) % 1000),
+                seed=self.config.random_state + round_idx * 1000 + client_seed,
                 max_samples=self.config.max_partition_samples,
                 min_examples_for_multimodal=self.config.min_examples_for_multimodal,
             )
@@ -157,7 +191,7 @@ class FedMARS:
                 dataset=client.dataset,
                 indices=indices,
                 batch_size=self.config.local_batch_size,
-                seed=self.config.random_state + round_idx * 10000 + group_idx + int(hash(str(client.client_id)) % 1000),
+                seed=self.config.random_state + round_idx * 10000 + group_idx + client_seed,
             )
             probe_model = clone_model(self.model, self.device)
             load_state_dict_(probe_model, global_state)
@@ -221,7 +255,7 @@ class FedMARS:
         transfer_scores = self._compute_transfer_scores(
             client,
             global_state,
-            round_seed=self.config.random_state + 30000 + round_idx,
+            round_seed=self.config.random_state + 30000 + round_idx + _stable_client_seed(client.client_id),
         )
         layer_lrs = {name: self._map_transfer_to_lr(score) for name, score in transfer_scores.items()}
 
@@ -241,6 +275,7 @@ class FedMARS:
             for batch in loader:
                 batch = move_batch_to_device(batch, self.device)
                 x, y = unpack_batch(batch)
+
                 local_model.zero_grad(set_to_none=True)
                 loss = self.criterion(local_model(x), y)
                 loss.backward()
@@ -251,6 +286,7 @@ class FedMARS:
                 with torch.no_grad():
                     for spec in self.layer_specs:
                         is_selected = spec.name in selected
+
                         if self.config.ablations.use_train_gate:
                             lr_scale = 1.0 if is_selected else self.config.nonselected_lr_scale
                             mu_scale = 1.0 if is_selected else self.config.nonselected_mu_scale
@@ -261,7 +297,11 @@ class FedMARS:
                         lr = float(layer_lrs[spec.name]) * lr_scale
                         mu = float(proximal_strengths.get(spec.name, 0.0)) * mu_scale
 
-                        if self.config.ablations.use_train_gate and round_idx >= self.config.freeze_unselected_after and not is_selected:
+                        if (
+                            self.config.ablations.use_train_gate
+                            and round_idx >= self.config.freeze_unselected_after
+                            and not is_selected
+                        ):
                             lr = 0.0
 
                         for pname in spec.param_names:
@@ -285,7 +325,7 @@ class FedMARS:
             raise ValueError("At least one client dataset is required.")
 
         client_weight_map = infer_client_weights(clients)
-        previous_global_state = None
+        previous_global_state: Mapping[str, torch.Tensor] | None = None
         previous_val_accuracy = 0.0
         previous_state = RoundState(drift=0.0, communication_ratio=0.0, validation_delta=0.0, credit_mean=0.0)
 
@@ -306,8 +346,9 @@ class FedMARS:
                     -1,
                 )
 
-            client_credit_dicts = []
-            client_credit_details = {}
+            client_credit_dicts: list[dict[str, float]] = []
+            client_credit_details: dict[str, dict[str, dict[str, Any]]] = {}
+
             for client in sampled_clients:
                 credits, details = self._phase_a_client_credit(client, global_state, ref_sketches, round_idx)
                 client_credit_dicts.append(credits)
@@ -319,10 +360,10 @@ class FedMARS:
             )
 
             selected_layers = select_layers_under_budget(
-                global_credit,
-                self.layer_costs,
-                action.budget_fraction,
-                action.threshold,
+                global_credit=global_credit,
+                layer_costs=self.layer_costs,
+                budget_fraction=action.budget_fraction,
+                threshold=action.threshold,
                 budget_scale=self.config.budget_scale,
                 ensure_nonempty=self.config.ensure_nonempty_gate,
             )
@@ -345,18 +386,18 @@ class FedMARS:
                 for spec in self.layer_specs
             }
 
-            client_updates = []
-            client_weights = []
-            client_transfer = {}
-            client_lrs = {}
+            client_updates: list[dict[str, dict[str, torch.Tensor]]] = []
+            client_weights: list[float] = []
+            client_transfer: dict[str, dict[str, float]] = {}
+            client_lrs: dict[str, dict[str, float]] = {}
 
             for client, credit_dict in zip(sampled_clients, client_credit_dicts):
                 sparse_update, transfer_scores, layer_lrs = self._phase_b_client_update(
-                    client,
-                    global_state,
-                    selected_layers,
-                    proximal_strengths,
-                    round_idx,
+                    client=client,
+                    global_state=global_state,
+                    selected_layers=selected_layers,
+                    proximal_strengths=proximal_strengths,
+                    round_idx=round_idx,
                 )
                 client_updates.append(sparse_update)
                 client_weights.append(client_weight_map[client.client_id])
@@ -402,13 +443,17 @@ class FedMARS:
                 reward = self.controller.compute_reward(validation_delta, comm_ratio, drift)
                 self.controller.update(previous_state, action, reward)
             else:
-                reward = validation_delta - self.config.controller.reward_comm_penalty * comm_ratio - self.config.controller.reward_drift_penalty * drift
+                reward = (
+                    validation_delta
+                    - self.config.controller.reward_comm_penalty * comm_ratio
+                    - self.config.controller.reward_drift_penalty * drift
+                )
 
             previous_state = RoundState(
                 drift=drift,
                 communication_ratio=comm_ratio,
                 validation_delta=validation_delta,
-                credit_mean=mean_or_zero(list(global_credit.values())),
+                credit_mean=_mean_or_zero(list(global_credit.values())),
             )
             previous_global_state = global_state
 
@@ -428,10 +473,12 @@ class FedMARS:
             }
             if val_metrics is not None:
                 round_log["validation"] = val_metrics
+
             self.history["rounds"].append(round_log)
 
         if server_test_loader is not None:
             self.history["test"] = self.evaluate(server_test_loader)
+
         return self.history
 
     def evaluate(self, loader: DataLoader) -> dict[str, float]:
