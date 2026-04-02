@@ -62,6 +62,11 @@ class FedMARSConfig:
     mu_max: float = 0.05
     alpha_credit: float = 0.5
     kappa_transfer: float = 1.0
+    rho_max: float = 0.01
+    num_rounds: int = 50
+    probe_batch_size: int = 32
+    default_budget_fraction: float = 1.0
+    default_threshold: float = -0.05
 
     rho_min: float = 0.001
     rho_max: float = 0.050
