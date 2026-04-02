@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import math
 import random
-from typing import Any, Dict, Mapping, Sequence, Tuple
+from typing import Any, Dict, Mapping, Sequence
 
 import numpy as np
 import torch
@@ -36,7 +36,7 @@ def safe_cosine(a: torch.Tensor, b: torch.Tensor, eps: float = 1e-12) -> float:
 
 
 def detach_state_dict(model: torch.nn.Module) -> Dict[str, torch.Tensor]:
-    return {k: v.detach().clone() for k, v in model.state_dict().items()}
+    return {k: v.detach().clone().cpu() for k, v in model.state_dict().items()}
 
 
 def load_state_dict_(model: torch.nn.Module, state_dict: Mapping[str, torch.Tensor]) -> None:
@@ -44,11 +44,10 @@ def load_state_dict_(model: torch.nn.Module, state_dict: Mapping[str, torch.Tens
 
 
 def clone_model(model: torch.nn.Module, device: str | torch.device) -> torch.nn.Module:
-    cloned = copy.deepcopy(model)
-    return cloned.to(device)
+    return copy.deepcopy(model).to(device)
 
 
-def unpack_batch(batch: Any) -> Tuple[torch.Tensor, torch.Tensor]:
+def unpack_batch(batch: Any):
     if isinstance(batch, (list, tuple)) and len(batch) >= 2:
         return batch[0], batch[1]
     raise TypeError("Each batch must be a tuple or list with at least (x, y).")

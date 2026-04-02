@@ -46,7 +46,8 @@ def extract_targets(dataset: Dataset) -> np.ndarray:
     if hasattr(dataset, "labels"):
         return np.asarray(getattr(dataset, "labels"))
     ys: list[int] = []
-    for item in dataset:
+    for i in range(len(dataset)):
+        item = dataset[i]
         if not isinstance(item, (list, tuple)) or len(item) < 2:
             raise ValueError("Dataset items must expose labels in position 1.")
         ys.append(int(item[1]))
@@ -89,7 +90,7 @@ def dirichlet_partition(
         for cid, shard in enumerate(shards):
             client_indices[cid].extend(int(i) for i in shard.tolist())
 
-    for _ in range(30):
+    for _ in range(50):
         sizes = [len(v) for v in client_indices]
         if min(sizes) >= min_size:
             break
@@ -102,6 +103,5 @@ def dirichlet_partition(
 
     clients: list[ClientDataset] = []
     for cid, indices in enumerate(client_indices):
-        indices = sorted(indices)
-        clients.append(ClientDataset(client_id=cid, dataset=Subset(dataset, indices)))
+        clients.append(ClientDataset(client_id=cid, dataset=Subset(dataset, sorted(indices))))
     return clients

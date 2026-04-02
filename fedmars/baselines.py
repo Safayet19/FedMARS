@@ -15,7 +15,7 @@ class _BaseFederatedBaseline:
     def __init__(self, model: torch.nn.Module, config: FedMARSConfig, criterion: torch.nn.Module | None = None):
         self.model = model.to(config.device)
         self.config = config
-        self.criterion = criterion if criterion is not None else torch.nn.CrossEntropyLoss()
+        self.criterion = criterion if criterion is not None else torch.nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
         set_seed(config.random_state)
 
     def _sample_clients(self, clients: Sequence[ClientDataset], round_idx: int) -> list[ClientDataset]:
@@ -34,17 +34,25 @@ class FedAvg(_BaseFederatedBaseline):
     def fit(self, clients: Sequence[ClientDataset], server_val_loader: DataLoader | None = None) -> dict:
         history = {"rounds": []}
         client_weights_all = infer_client_weights(clients)
+
         for round_idx in range(self.config.num_rounds):
             sampled = self._sample_clients(clients, round_idx)
             global_state = detach_state_dict(self.model)
             client_updates = []
             weights = []
+
             for client in sampled:
                 local_model = clone_model(self.model, self.config.device)
                 load_state_dict_(local_model, global_state)
-                optimizer = torch.optim.SGD(local_model.parameters(), lr=self.config.rho_max)
+                optimizer = torch.optim.SGD(
+                    local_model.parameters(),
+                    lr=self.config.rho_max,
+                    momentum=0.9,
+                    weight_decay=self.config.weight_decay,
+                )
                 loader = DataLoader(client.dataset, batch_size=self.config.local_batch_size, shuffle=True)
                 local_model.train()
+
                 for _ in range(self.config.local_epochs):
                     for batch in loader:
                         batch = move_batch_to_device(batch, self.config.device)
@@ -53,9 +61,11 @@ class FedAvg(_BaseFederatedBaseline):
                         loss = self.criterion(local_model(x), y)
                         loss.backward()
                         optimizer.step()
-                update = {k: local_model.state_dict()[k].detach().clone() - global_state[k] for k in global_state}
+
+                update = {k: local_model.state_dict()[k].detach().clone().cpu() - global_state[k] for k in global_state}
                 client_updates.append(update)
                 weights.append(client_weights_all[client.client_id])
+
             total_weight = float(sum(weights)) or 1.0
             with torch.no_grad():
                 named_params = dict(self.model.named_parameters())
@@ -64,10 +74,12 @@ class FedAvg(_BaseFederatedBaseline):
                     for update, weight in zip(client_updates, weights):
                         delta += (float(weight) / total_weight) * update[pname].to(self.config.device)
                     named_params[pname].add_(delta)
+
             log = {"round": round_idx}
             if server_val_loader is not None:
                 log.update(self.evaluate(server_val_loader))
             history["rounds"].append(log)
+
         return history
 
 
@@ -75,18 +87,26 @@ class FedProx(_BaseFederatedBaseline):
     def fit(self, clients: Sequence[ClientDataset], server_val_loader: DataLoader | None = None, mu: float = 0.01) -> dict:
         history = {"rounds": []}
         client_weights_all = infer_client_weights(clients)
+
         for round_idx in range(self.config.num_rounds):
             sampled = self._sample_clients(clients, round_idx)
             global_state = detach_state_dict(self.model)
             client_updates = []
             weights = []
+
             for client in sampled:
                 local_model = clone_model(self.model, self.config.device)
                 load_state_dict_(local_model, global_state)
-                optimizer = torch.optim.SGD(local_model.parameters(), lr=self.config.rho_max)
+                optimizer = torch.optim.SGD(
+                    local_model.parameters(),
+                    lr=self.config.rho_max,
+                    momentum=0.9,
+                    weight_decay=self.config.weight_decay,
+                )
                 loader = DataLoader(client.dataset, batch_size=self.config.local_batch_size, shuffle=True)
                 local_model.train()
                 named_params = dict(local_model.named_parameters())
+
                 for _ in range(self.config.local_epochs):
                     for batch in loader:
                         batch = move_batch_to_device(batch, self.config.device)
@@ -99,9 +119,11 @@ class FedProx(_BaseFederatedBaseline):
                             prox = prox + 0.5 * mu * torch.sum((param - global_state[pname].to(param.device)) ** 2)
                         (loss + prox).backward()
                         optimizer.step()
-                update = {k: local_model.state_dict()[k].detach().clone() - global_state[k] for k in global_state}
+
+                update = {k: local_model.state_dict()[k].detach().clone().cpu() - global_state[k] for k in global_state}
                 client_updates.append(update)
                 weights.append(client_weights_all[client.client_id])
+
             total_weight = float(sum(weights)) or 1.0
             with torch.no_grad():
                 named_params = dict(self.model.named_parameters())
@@ -110,8 +132,10 @@ class FedProx(_BaseFederatedBaseline):
                     for update, weight in zip(client_updates, weights):
                         delta += (float(weight) / total_weight) * update[pname].to(self.config.device)
                     named_params[pname].add_(delta)
+
             log = {"round": round_idx}
             if server_val_loader is not None:
                 log.update(self.evaluate(server_val_loader))
             history["rounds"].append(log)
+
         return history

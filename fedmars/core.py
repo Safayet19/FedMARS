@@ -7,12 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from .aggregation import (
-    aggregate_sparse_updates,
-    apply_global_update,
-    select_layers_under_budget,
-    select_top_positive_under_budget,
-)
+from .aggregation import aggregate_sparse_updates, apply_global_update, select_layers_under_budget
 from .config import FedMARSConfig
 from .controller import AdaptiveRoundController, ControllerAction, RoundState
 from .credit import aggregate_global_credit, build_reference_sketch, compute_layer_credit
@@ -48,7 +43,7 @@ class FedMARS:
         self.config = config if config is not None else FedMARSConfig()
         self.device = torch.device(self.config.device)
         self.model = model.to(self.device)
-        self.criterion = criterion if criterion is not None else torch.nn.CrossEntropyLoss()
+        self.criterion = criterion if criterion is not None else torch.nn.CrossEntropyLoss(label_smoothing=self.config.label_smoothing)
         set_seed(self.config.random_state)
 
         self.layer_specs: list[LayerSpec] = build_layer_specs(self.model)
@@ -56,6 +51,13 @@ class FedMARS:
         self.depth_weights = compute_depth_weights(self.layer_specs, mode=self.config.depth_weight_mode)
         self.layer_costs = compute_layer_costs(self.layer_specs)
         self.controller = AdaptiveRoundController(self.config.controller, seed=self.config.random_state)
+
+        self.ref_memory: dict[str, torch.Tensor | None] = {spec.name: None for spec in self.layer_specs}
+        self.server_velocity: dict[str, dict[str, torch.Tensor]] = {
+            spec.name: {pname: torch.zeros_like(dict(self.model.named_parameters())[pname]).detach().clone().cpu() for pname in spec.param_names}
+            for spec in self.layer_specs
+        }
+
         self.history: dict[str, Any] = {"config": asdict(self.config), "rounds": []}
 
     def _sample_clients(self, clients: Sequence[ClientDataset], round_idx: int) -> list[ClientDataset]:
@@ -66,21 +68,36 @@ class FedMARS:
         picked = rng.choice(np.arange(num_clients), size=choose, replace=False)
         return [clients[int(i)] for i in picked.tolist()]
 
-    def _previous_movement_by_layer(
+    def _build_reference_sketches(
         self,
         current_state: Mapping[str, torch.Tensor],
         previous_state: Mapping[str, torch.Tensor] | None,
     ) -> dict[str, torch.Tensor | None]:
-        out: dict[str, torch.Tensor | None] = {}
+        refs: dict[str, torch.Tensor | None] = {}
         if previous_state is None:
-            for spec in self.layer_specs:
-                out[spec.name] = None
-            return out
+            return {spec.name: None for spec in self.layer_specs}
+
         for spec in self.layer_specs:
             cur = flatten_params_from_state(current_state, spec)
             prev = flatten_params_from_state(previous_state, spec)
-            out[spec.name] = cur - prev
-        return out
+            raw_delta = cur - prev
+            unit = build_reference_sketch(raw_delta, mode=self.config.reference_sketch_mode)
+            if unit is None:
+                refs[spec.name] = self.ref_memory[spec.name]
+                continue
+            if self.config.reference_sketch_mode == "ema_unit":
+                prev_ref = self.ref_memory[spec.name]
+                if prev_ref is None:
+                    merged = unit
+                else:
+                    merged = self.config.reference_momentum * prev_ref + (1.0 - self.config.reference_momentum) * unit
+                    merged = merged / (torch.norm(merged) + 1e-12)
+                refs[spec.name] = merged
+            else:
+                refs[spec.name] = unit
+
+        self.ref_memory = {k: (v.detach().clone() if v is not None else None) for k, v in refs.items()}
+        return refs
 
     def _compute_batch_layer_grads(self, model: torch.nn.Module, batch) -> dict[str, torch.Tensor]:
         model.train()
@@ -148,21 +165,24 @@ class FedMARS:
 
         credits: dict[str, float] = {}
         details: dict[str, dict[str, Any]] = {}
+
         for spec in self.layer_specs:
             grads = [cg[spec.name] for cg in cluster_grads]
             reference = ref_sketches.get(spec.name) if self.config.ablations.use_reference_sketch else None
+
             if self.config.ablations.use_counterfactual_mixture:
                 weights, mixed, conflict, objective = select_counterfactual_mixture(
                     grads,
                     reference,
                     self.config.mixture_conflict_beta,
-                    self.config.mixture_resolution,
+                    self.config.mixture_temperature,
                 )
             else:
                 weights = np.ones(len(grads), dtype=float) / max(len(grads), 1)
                 mixed = sum(grads) / max(len(grads), 1)
                 conflict = 0.0
                 objective = float(torch.norm(mixed))
+
             record = compute_layer_credit(
                 reference=reference,
                 mixed_gradient=mixed,
@@ -172,6 +192,7 @@ class FedMARS:
                 lambda_r=self.config.lambda_r if self.config.ablations.use_layer_credit else 0.0,
                 lambda_c=self.config.lambda_c if self.config.ablations.use_layer_credit else 0.0,
             )
+
             credits[spec.name] = record.credit if self.config.ablations.use_layer_credit else record.benefit
             details[spec.name] = {
                 "weights": weights.tolist(),
@@ -180,7 +201,9 @@ class FedMARS:
                 "credit": float(credits[spec.name]),
                 "benefit": float(record.benefit),
                 "alignment": float(record.alignment),
+                "norm": float(record.norm),
             }
+
         return credits, details
 
     def _phase_b_client_update(
@@ -194,8 +217,14 @@ class FedMARS:
         local_model = clone_model(self.model, self.device)
         load_state_dict_(local_model, global_state)
         named_params = dict(local_model.named_parameters())
-        transfer_scores = self._compute_transfer_scores(client, global_state, round_seed=self.config.random_state + 30000 + round_idx)
+
+        transfer_scores = self._compute_transfer_scores(
+            client,
+            global_state,
+            round_seed=self.config.random_state + 30000 + round_idx,
+        )
         layer_lrs = {name: self._map_transfer_to_lr(score) for name, score in transfer_scores.items()}
+
         loader = DataLoader(
             client.dataset,
             batch_size=self.config.local_batch_size,
@@ -203,7 +232,10 @@ class FedMARS:
             num_workers=self.config.num_workers,
             pin_memory=self.config.pin_memory,
         )
+
         global_ref = {k: v.detach().clone().to(self.device) for k, v in global_state.items()}
+        selected = set(selected_layers)
+
         local_model.train()
         for _ in range(self.config.local_epochs):
             for batch in loader:
@@ -212,19 +244,35 @@ class FedMARS:
                 local_model.zero_grad(set_to_none=True)
                 loss = self.criterion(local_model(x), y)
                 loss.backward()
+
                 if self.config.max_grad_norm is not None:
                     torch.nn.utils.clip_grad_norm_(local_model.parameters(), max_norm=self.config.max_grad_norm)
+
                 with torch.no_grad():
                     for spec in self.layer_specs:
-                        lr = float(layer_lrs[spec.name])
-                        mu = float(proximal_strengths.get(spec.name, 0.0))
+                        is_selected = spec.name in selected
+                        if self.config.ablations.use_train_gate:
+                            lr_scale = 1.0 if is_selected else self.config.nonselected_lr_scale
+                            mu_scale = 1.0 if is_selected else self.config.nonselected_mu_scale
+                        else:
+                            lr_scale = 1.0
+                            mu_scale = 1.0
+
+                        lr = float(layer_lrs[spec.name]) * lr_scale
+                        mu = float(proximal_strengths.get(spec.name, 0.0)) * mu_scale
+
+                        if self.config.ablations.use_train_gate and round_idx >= self.config.freeze_unselected_after and not is_selected:
+                            lr = 0.0
+
                         for pname in spec.param_names:
                             param = named_params[pname]
                             grad = torch.zeros_like(param) if param.grad is None else param.grad
-                            param.add_(-lr * (grad + mu * (param - global_ref[pname])))
+                            update = grad + self.config.weight_decay * param + mu * (param - global_ref[pname])
+                            param.add_(-lr * update)
+
         final_state = detach_state_dict(local_model)
         deltas = state_delta_by_layer(final_state, global_state, self.layer_specs)
-        sparse = {name: deltas[name] for name in set(selected_layers) if name in deltas}
+        sparse = {name: deltas[name] for name in selected if name in deltas}
         return sparse, transfer_scores, layer_lrs
 
     def fit(
@@ -235,21 +283,19 @@ class FedMARS:
     ) -> dict[str, Any]:
         if len(clients) == 0:
             raise ValueError("At least one client dataset is required.")
+
         client_weight_map = infer_client_weights(clients)
         previous_global_state = None
         previous_val_accuracy = 0.0
         previous_state = RoundState(drift=0.0, communication_ratio=0.0, validation_delta=0.0, credit_mean=0.0)
+
         if server_val_loader is not None:
             previous_val_accuracy = self.evaluate(server_val_loader)["accuracy"]
 
         for round_idx in range(self.config.num_rounds):
             sampled_clients = self._sample_clients(clients, round_idx)
             global_state = detach_state_dict(self.model)
-            prev_movement = self._previous_movement_by_layer(global_state, previous_global_state)
-            ref_sketches = {
-                name: build_reference_sketch(vec, mode=self.config.reference_sketch_mode)
-                for name, vec in prev_movement.items()
-            }
+            ref_sketches = self._build_reference_sketches(global_state, previous_global_state)
 
             if self.config.ablations.use_round_controller and self.config.controller.enabled:
                 action = self.controller.choose(previous_state)
@@ -272,37 +318,14 @@ class FedMARS:
                 [spec.name for spec in self.layer_specs],
             )
 
-            if round_idx < self.config.warmup_rounds:
-                selected_layers = [spec.name for spec in self.layer_specs]
-            elif round_idx < self.config.warmup_rounds + self.config.positive_pair_rounds:
-                pair = select_top_positive_under_budget(
-                    global_credit,
-                    self.layer_costs,
-                    action.budget_fraction,
-                    action.threshold,
-                    top_k=2,
-                    budget_scale=self.config.budget_scale,
-                )
-                if len(pair) >= 2:
-                    selected_layers = pair
-                else:
-                    selected_layers = select_layers_under_budget(
-                        global_credit,
-                        self.layer_costs,
-                        action.budget_fraction,
-                        action.threshold,
-                        budget_scale=self.config.budget_scale,
-                        ensure_nonempty=self.config.ensure_nonempty_gate,
-                    )
-            else:
-                selected_layers = select_layers_under_budget(
-                    global_credit,
-                    self.layer_costs,
-                    action.budget_fraction,
-                    action.threshold,
-                    budget_scale=self.config.budget_scale,
-                    ensure_nonempty=self.config.ensure_nonempty_gate,
-                )
+            selected_layers = select_layers_under_budget(
+                global_credit,
+                self.layer_costs,
+                action.budget_fraction,
+                action.threshold,
+                budget_scale=self.config.budget_scale,
+                ensure_nonempty=self.config.ensure_nonempty_gate,
+            )
 
             layer_steps = {
                 spec.name: float(
@@ -312,6 +335,7 @@ class FedMARS:
                 )
                 for spec in self.layer_specs
             }
+
             proximal_strengths = {
                 spec.name: float(
                     self.config.mu_min
@@ -325,7 +349,8 @@ class FedMARS:
             client_weights = []
             client_transfer = {}
             client_lrs = {}
-            for client in sampled_clients:
+
+            for client, credit_dict in zip(sampled_clients, client_credit_dicts):
                 sparse_update, transfer_scores, layer_lrs = self._phase_b_client_update(
                     client,
                     global_state,
@@ -338,15 +363,33 @@ class FedMARS:
                 client_transfer[str(client.client_id)] = transfer_scores
                 client_lrs[str(client.client_id)] = layer_lrs
 
-            aggregated_update = aggregate_sparse_updates(client_updates, client_weights, selected_layers)
-            new_state = apply_global_update(self.model, aggregated_update, layer_steps)
+            aggregated_update = aggregate_sparse_updates(
+                sparse_updates=client_updates,
+                client_weights=client_weights,
+                selected_layers=selected_layers,
+                client_credit_dicts=client_credit_dicts,
+                use_credit_weighting=self.config.ablations.use_credit_weighted_aggregation,
+            )
+
+            momentum_update: dict[str, dict[str, torch.Tensor]] = {}
+            for spec in self.layer_specs:
+                if spec.name not in aggregated_update:
+                    continue
+                layer_payload: dict[str, torch.Tensor] = {}
+                for pname, delta in aggregated_update[spec.name].items():
+                    vel = self.server_velocity[spec.name][pname]
+                    vel.mul_(self.config.aggregation_momentum).add_(delta)
+                    layer_payload[pname] = vel.detach().clone()
+                momentum_update[spec.name] = layer_payload
+
+            new_state = apply_global_update(self.model, momentum_update, layer_steps)
 
             comm_ratio = float(sum(self.layer_costs[name] for name in selected_layers))
             drift = 0.0
             for spec in self.layer_specs:
                 before = flatten_params_from_state(global_state, spec)
                 after = flatten_params_from_state(new_state, spec)
-                drift += float(torch.sum((after - before) ** 2))
+                drift += float(torch.mean((after - before) ** 2))
 
             val_metrics = None
             validation_delta = 0.0
