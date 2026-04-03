@@ -10,7 +10,7 @@ def select_layers_under_budget(
     layer_costs: Mapping[str, float],
     budget_fraction: float,
     threshold: float,
-    budget_scale: int = 200,
+    budget_scale: int | None = None,
     ensure_nonempty: bool = True,
 ) -> list[str]:
     candidates = [
@@ -58,6 +58,7 @@ def aggregate_sparse_updates(
     selected_layers: Sequence[str],
     client_credit_dicts: Sequence[Mapping[str, float]] | None = None,
     use_credit_weighting: bool = False,
+    mode: str = "clipped_weighted_mean",
 ) -> dict[str, dict[str, torch.Tensor]]:
     out: dict[str, dict[str, torch.Tensor]] = {}
 
@@ -73,7 +74,7 @@ def aggregate_sparse_updates(
 
             if use_credit_weighting and client_credit_dicts is not None:
                 credit = float(client_credit_dicts[idx].get(layer_name, 0.0))
-                weight *= 1.0 + 2.0 * max(0.0, credit)
+                weight *= 1.0 + max(0.0, credit)
 
             if weight <= 0.0:
                 continue
@@ -81,12 +82,10 @@ def aggregate_sparse_updates(
             layer_payloads.append(update[layer_name])
             layer_weights.append(weight)
 
-        total_weight = float(sum(layer_weights))
-        if total_weight <= 0.0:
+        if not layer_payloads:
             continue
 
         layer_accum: dict[str, torch.Tensor] = {}
-
         param_names = set()
         for payload in layer_payloads:
             param_names.update(payload.keys())
@@ -104,6 +103,17 @@ def aggregate_sparse_updates(
             if not deltas:
                 continue
 
+            if mode == "weighted_mean":
+                denom = float(sum(weights)) or 1.0
+                acc = torch.zeros_like(deltas[0])
+                for delta, weight in zip(deltas, weights):
+                    acc += float(weight) * delta
+                layer_accum[pname] = acc / denom
+                continue
+
+            if mode != "clipped_weighted_mean":
+                raise ValueError(f"Unsupported aggregation mode: {mode}")
+
             norms = [float(torch.norm(delta)) for delta in deltas]
             sorted_norms = sorted(norms)
             median_norm = sorted_norms[len(sorted_norms) // 2]
@@ -113,10 +123,11 @@ def aggregate_sparse_updates(
             denom = 0.0
 
             for delta, weight, norm in zip(deltas, weights, norms):
+                clipped = delta
                 if clip_threshold > 0.0 and norm > clip_threshold:
                     scale = clip_threshold / (norm + 1e-12)
-                    delta = delta * scale
-                acc += float(weight) * delta
+                    clipped = delta * scale
+                acc += float(weight) * clipped
                 denom += float(weight)
 
             if denom > 0.0:
@@ -125,6 +136,28 @@ def aggregate_sparse_updates(
         if layer_accum:
             out[layer_name] = layer_accum
 
+    return out
+
+
+def apply_layer_momentum(
+    aggregated_updates: Mapping[str, Mapping[str, torch.Tensor]],
+    velocity_state: dict[str, dict[str, torch.Tensor]],
+    momentum: float,
+) -> dict[str, dict[str, torch.Tensor]]:
+    if momentum <= 0.0:
+        return {
+            layer_name: {pname: delta.detach().clone() for pname, delta in payload.items()}
+            for layer_name, payload in aggregated_updates.items()
+        }
+
+    out: dict[str, dict[str, torch.Tensor]] = {}
+    for layer_name, payload in aggregated_updates.items():
+        layer_payload: dict[str, torch.Tensor] = {}
+        for pname, delta in payload.items():
+            vel = velocity_state[layer_name][pname]
+            vel.mul_(momentum).add_(delta.detach().cpu())
+            layer_payload[pname] = vel.detach().clone()
+        out[layer_name] = layer_payload
     return out
 
 

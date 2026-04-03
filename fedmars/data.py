@@ -55,10 +55,10 @@ def extract_targets(dataset: Dataset) -> np.ndarray:
 
 
 def infer_client_weights(clients: Sequence[ClientDataset]) -> dict[int | str, float]:
-    lengths = np.array([len(c) for c in clients], dtype=float)
+    lengths = np.asarray([len(c) for c in clients], dtype=float)
     total = float(lengths.sum())
     out: dict[int | str, float] = {}
-    if total <= 0:
+    if total <= 0.0:
         for client in clients:
             out[client.client_id] = 0.0
         return out
@@ -76,6 +76,8 @@ def dirichlet_partition(
 ) -> list[ClientDataset]:
     if num_clients <= 0:
         raise ValueError("num_clients must be positive.")
+    if alpha <= 0:
+        raise ValueError("alpha must be positive.")
     rng = np.random.default_rng(seed)
     y = extract_targets(dataset)
     classes = np.unique(y)
@@ -90,7 +92,7 @@ def dirichlet_partition(
         for cid, shard in enumerate(shards):
             client_indices[cid].extend(int(i) for i in shard.tolist())
 
-    for _ in range(50):
+    for _ in range(100):
         sizes = [len(v) for v in client_indices]
         if min(sizes) >= min_size:
             break

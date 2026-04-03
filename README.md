@@ -1,15 +1,13 @@
 # FedMARS
 
-FedMARS is a research-oriented PyTorch package for a **credit-driven federated learning** workflow:
-multimodal local gradients -> counterfactual mixture selection -> client layer credit -> global layer credit -> tri-control
-(communication gate, server step size, proximal strength).
+FedMARS is a PyTorch reference package for a unified layer-centric federated learning pipeline:
 
-This package is designed as a **GitHub-installable reference implementation** for experiments, baselines, ablations, and external validation.
+global direction reference -> multi-cluster multi-mini-batch gradients -> counterfactual mixture selection -> benefit-risk-cost-depth credit -> robust global credit aggregation -> tri-control -> transfer-based layer learning rate -> adaptive round controller.
 
-## Install from GitHub
+## Install
 
 ```bash
-pip install git+https://github.com/<YOUR_GITHUB_USERNAME>/<YOUR_REPOSITORY_NAME>.git
+pip install -e .
 ```
 
 ## Minimal usage
@@ -35,29 +33,69 @@ for cid in range(5):
 
 config = FedMARSConfig(num_rounds=3, local_epochs=1, local_batch_size=16)
 trainer = FedMARS(model=model, config=config)
-result = trainer.fit(clients)
-print(result["rounds"][-1]["selected_layers"])
+history = trainer.fit(clients)
+print(history["rounds"][-1]["selected_layers"])
 ```
 
-## Package layout
+## Main package files
 
-- `fedmars/core.py`: main FedMARS algorithm.
-- `fedmars/baselines.py`: FedAvg and FedProx reference baselines.
-- `fedmars/config.py`: global configuration and ablation flags.
+- `fedmars/core.py`: full FedMARS training loop and round logging.
+- `fedmars/config.py`: all configuration knobs, controller config, ablation config.
+- `fedmars/credit.py`: reference sketch, layer credit, global credit aggregation, control-credit postprocessing.
+- `fedmars/mixture.py`: counterfactual mixture optimization and conflict computation.
+- `fedmars/partition.py`: local clustering and repeated mini-batch sampling.
+- `fedmars/layers.py`: layer grouping, depth weights, costs, bits, vector utilities.
+- `fedmars/aggregation.py`: budgeted layer selection, sparse aggregation, server momentum, global update.
 - `fedmars/controller.py`: adaptive round controller.
-- `fedmars/credit.py`: reference sketch, layer credit, global credit.
-- `fedmars/mixture.py`: counterfactual mixture selection.
-- `fedmars/partition.py`: local multimodal partitioning.
-- `fedmars/layers.py`: layer grouping and vector conversion.
-- `fedmars/aggregation.py`: budgeted gating and update aggregation.
-- `fedmars/data.py`: client dataset helpers and Dirichlet split utility.
-- `fedmars/utils.py`: shared helper functions.
+- `fedmars/baselines.py`: FedAvg and FedProx reference baselines.
+- `fedmars/data.py`: client dataset helpers and Dirichlet partitioning.
+- `fedmars/utils.py`: shared utilities.
+- `examples/`: runnable usage examples.
+- `tests/`: smoke tests for the package.
 
-## Fixed main-design choices in this reference implementation
+## Default main-design choices in this implementation
 
 - linear depth weighting,
+- repeated mini-batch gradients inside each client cluster,
+- counterfactual mixture selection on cluster gradients,
 - residual conflict as the risk term,
-- median aggregation for global layer credit,
-- sigmoid mappings for server step size and proximal strength,
-- small local cluster count,
-- lightweight bandit-style round controller as a practical RL stand-in.
+- median global credit aggregation,
+- robust-zscore control credit for stable tri-control mapping,
+- transferability from repeated probe-batch gradient agreement,
+- optional adaptive round controller enabled by default,
+- clipped weighted aggregation for sparse server updates.
+
+## Logged fields
+
+Each round log contains:
+
+- sampled clients,
+- controller action,
+- selected layers,
+- raw global credit,
+- control credit used for tri-control,
+- layer-wise server step sizes,
+- layer-wise proximal strengths,
+- communication ratio,
+- client-to-server bits,
+- server-to-client bits,
+- total bits,
+- drift,
+- reward,
+- client credit diagnostics,
+- transfer scores,
+- layer learning rates.
+
+## Examples
+
+Run a quick synthetic smoke example:
+
+```bash
+python examples/quickstart_synthetic.py
+```
+
+Run an offline digits comparison:
+
+```bash
+python examples/compare_baselines.py
+```

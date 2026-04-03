@@ -1,11 +1,8 @@
 __pycache__/
+.pytest_cache/
 *.pyc
 *.pyo
 *.pyd
-*.so
-*.egg-info/
-.pytest_cache/
-.venv/
 build/
 dist/
-.ipynb_checkpoints/
+*.egg-info/

@@ -27,8 +27,8 @@ def build_layer_specs(model: torch.nn.Module) -> list[LayerSpec]:
     groups: dict[str, list[str]] = {}
     for name, _ in model.named_parameters():
         groups.setdefault(_layer_group_name(name), []).append(name)
-    specs: list[LayerSpec] = []
     named_params = dict(model.named_parameters())
+    specs: list[LayerSpec] = []
     for depth_idx, key in enumerate(groups.keys(), start=1):
         numel = sum(int(named_params[name].numel()) for name in groups[key])
         specs.append(LayerSpec(name=key, param_names=tuple(groups[key]), depth_index=depth_idx, numel=numel))
@@ -45,6 +45,8 @@ def compute_depth_weights(layer_specs: list[LayerSpec], mode: str = "linear") ->
     for spec in layer_specs:
         if mode == "linear":
             out[spec.name] = spec.depth_index / L
+        elif mode == "quadratic":
+            out[spec.name] = (spec.depth_index / L) ** 2
         elif mode == "uniform":
             out[spec.name] = 1.0
         else:
@@ -57,6 +59,10 @@ def compute_layer_costs(layer_specs: list[LayerSpec]) -> dict[str, float]:
     if total <= 0:
         return {spec.name: 0.0 for spec in layer_specs}
     return {spec.name: float(spec.numel / total) for spec in layer_specs}
+
+
+def compute_layer_bits(layer_specs: list[LayerSpec], param_bits: int = 32) -> dict[str, int]:
+    return {spec.name: int(spec.numel * param_bits) for spec in layer_specs}
 
 
 def flatten_params_from_state(state_dict: Mapping[str, torch.Tensor], spec: LayerSpec) -> torch.Tensor:

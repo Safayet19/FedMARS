@@ -59,6 +59,8 @@ class AdaptiveRoundController:
         return ControllerAction(budget_fraction=budget, threshold=threshold, action_index=idx)
 
     def update(self, state: RoundState, action: ControllerAction, reward: float) -> None:
+        if action.action_index < 0:
+            return
         key = self.state_key(state)
         qvals = self.q_table.setdefault(key, np.zeros(len(self.actions), dtype=float))
         qvals[action.action_index] += self.config.step_size * (reward - qvals[action.action_index])

@@ -20,13 +20,16 @@ clients = [make_client(seed) for seed in range(5)]
 val_x = torch.randn(200, 8)
 val_y = ((val_x[:, 0] + 0.7 * val_x[:, 1] - 0.5 * val_x[:, 2]) > 0).long()
 val_loader = DataLoader(TensorDataset(val_x, val_y), batch_size=64)
-config = FedMARSConfig(num_rounds=3, local_epochs=1, local_batch_size=16, client_fraction=1.0)
+config = FedMARSConfig(num_rounds=3, local_epochs=1, local_batch_size=16, client_fraction=1.0, min_clients_per_round=5)
 
 fedmars = FedMARS(make_model(), config)
-print("FedMARS:", fedmars.fit(clients, server_val_loader=val_loader)["rounds"][-1].get("validation", {}))
+fedmars_history = fedmars.fit(clients, server_val_loader=val_loader)
+print("FedMARS:", fedmars_history["rounds"][-1].get("validation", {}))
 
 fedavg = FedAvg(make_model(), config)
-print("FedAvg:", fedavg.fit(clients, server_val_loader=val_loader)["rounds"][-1])
+fedavg_history = fedavg.fit(clients, server_val_loader=val_loader)
+print("FedAvg:", fedavg_history["rounds"][-1].get("validation", {}))
 
 fedprox = FedProx(make_model(), config)
-print("FedProx:", fedprox.fit(clients, server_val_loader=val_loader)["rounds"][-1])
+fedprox_history = fedprox.fit(clients, server_val_loader=val_loader)
+print("FedProx:", fedprox_history["rounds"][-1].get("validation", {}))

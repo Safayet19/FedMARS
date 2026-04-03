@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fedmars"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reference PyTorch implementation of FedMARS, a credit-driven layer-wise federated learning framework."
 readme = "README.md"
 requires-python = ">=3.10"
