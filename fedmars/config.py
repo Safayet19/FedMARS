@@ -26,7 +26,7 @@ class AblationConfig:
     use_counterfactual_mixture: bool = True
     use_layer_credit: bool = True
     use_transfer_lr: bool = True
-    use_round_controller: bool = False
+    use_round_controller: bool = True
     use_depth_weight: bool = True
     use_train_gate: bool = True
     use_credit_weighted_aggregation: bool = True
