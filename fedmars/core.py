@@ -48,6 +48,23 @@ def _mean_or_zero(values: Sequence[float]) -> float:
     return float(sum(values) / len(values))
 
 
+def _unflatten_layer_vector(
+    vector: torch.Tensor,
+    spec: LayerSpec,
+    state_dict: Mapping[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    out: dict[str, torch.Tensor] = {}
+    offset = 0
+    vec = vector.reshape(-1)
+    for pname in spec.param_names:
+        ref = state_dict[pname]
+        numel = int(ref.numel())
+        chunk = vec[offset : offset + numel].reshape(ref.shape).to(dtype=ref.dtype)
+        out[pname] = chunk
+        offset += numel
+    return out
+
+
 class FedMARS:
     def __init__(
         self,
@@ -128,6 +145,15 @@ class FedMARS:
         self.ref_memory = {k: (v.detach().clone() if v is not None else None) for k, v in refs.items()}
         return refs
 
+    def _compute_batch_loss(self, model: torch.nn.Module, batch) -> float:
+        model.eval()
+        with torch.no_grad():
+            batch = move_batch_to_device(batch, self.device)
+            x, y = unpack_batch(batch)
+            logits = model(x)
+            loss = self.criterion(logits, y)
+        return float(loss)
+
     def _compute_batch_layer_grads(self, model: torch.nn.Module, batch) -> dict[str, torch.Tensor]:
         model.train()
         model.zero_grad(set_to_none=True)
@@ -164,6 +190,31 @@ class FedMARS:
             * sigmoid(self.config.kappa_transfer * (transfer_score - self.config.tau_transfer))
         )
 
+    def _probe_layer_gain(
+        self,
+        global_state: Mapping[str, torch.Tensor],
+        spec: LayerSpec,
+        mixed_gradient: torch.Tensor,
+        probe_batch,
+    ) -> float:
+        probe_step = float(getattr(self.config, "probe_step", 0.05))
+        if probe_step <= 0.0:
+            return 0.0
+
+        base_model = clone_model(self.model, self.device)
+        load_state_dict_(base_model, global_state)
+        loss_before = self._compute_batch_loss(base_model, probe_batch)
+
+        step_chunks = _unflatten_layer_vector(mixed_gradient, spec, global_state)
+
+        with torch.no_grad():
+            named_params = dict(base_model.named_parameters())
+            for pname in spec.param_names:
+                named_params[pname].add_(-probe_step * step_chunks[pname].to(named_params[pname].device))
+
+        loss_after = self._compute_batch_loss(base_model, probe_batch)
+        return float(loss_before - loss_after)
+
     def _phase_a_client_credit(
         self,
         client: ClientDataset,
@@ -197,6 +248,15 @@ class FedMARS:
             load_state_dict_(probe_model, global_state)
             cluster_grads.append(self._compute_batch_layer_grads(probe_model, batch))
 
+        probe_batch = sample_batch_from_indices(
+            dataset=client.dataset,
+            indices=list(range(len(client.dataset))),
+            batch_size=self.config.probe_batch_size,
+            seed=self.config.random_state + round_idx * 20000 + client_seed,
+        )
+
+        lambda_v = float(getattr(self.config, "lambda_v", 0.35))
+
         credits: dict[str, float] = {}
         details: dict[str, dict[str, Any]] = {}
 
@@ -217,6 +277,8 @@ class FedMARS:
                 conflict = 0.0
                 objective = float(torch.norm(mixed))
 
+            probe_gain = self._probe_layer_gain(global_state, spec, mixed, probe_batch) if lambda_v > 0.0 else 0.0
+
             record = compute_layer_credit(
                 reference=reference,
                 mixed_gradient=mixed,
@@ -225,6 +287,8 @@ class FedMARS:
                 depth_weight=self.depth_weights[spec.name] if self.config.ablations.use_depth_weight else 1.0,
                 lambda_r=self.config.lambda_r if self.config.ablations.use_layer_credit else 0.0,
                 lambda_c=self.config.lambda_c if self.config.ablations.use_layer_credit else 0.0,
+                probe_gain=probe_gain if self.config.ablations.use_layer_credit else 0.0,
+                lambda_v=lambda_v if self.config.ablations.use_layer_credit else 0.0,
             )
 
             credits[spec.name] = record.credit if self.config.ablations.use_layer_credit else record.benefit
@@ -236,6 +300,7 @@ class FedMARS:
                 "benefit": float(record.benefit),
                 "alignment": float(record.alignment),
                 "norm": float(record.norm),
+                "probe_gain": float(record.probe_gain),
             }
 
         return credits, details

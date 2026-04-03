@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Mapping, Sequence
 
-import numpy as np
 import torch
 
 
@@ -63,9 +62,8 @@ def aggregate_sparse_updates(
     out: dict[str, dict[str, torch.Tensor]] = {}
 
     for layer_name in selected_layers:
-        layer_accum: dict[str, torch.Tensor] = {}
-        effective_weights: list[float] = []
         layer_payloads: list[Mapping[str, torch.Tensor]] = []
+        layer_weights: list[float] = []
 
         for idx, update in enumerate(sparse_updates):
             if layer_name not in update:
@@ -81,17 +79,48 @@ def aggregate_sparse_updates(
                 continue
 
             layer_payloads.append(update[layer_name])
-            effective_weights.append(weight)
+            layer_weights.append(weight)
 
-        total_weight = float(sum(effective_weights))
+        total_weight = float(sum(layer_weights))
         if total_weight <= 0.0:
             continue
 
-        for payload, weight in zip(layer_payloads, effective_weights):
-            for pname, delta in payload.items():
-                if pname not in layer_accum:
-                    layer_accum[pname] = torch.zeros_like(delta)
-                layer_accum[pname] += (weight / total_weight) * delta
+        layer_accum: dict[str, torch.Tensor] = {}
+
+        param_names = set()
+        for payload in layer_payloads:
+            param_names.update(payload.keys())
+
+        for pname in param_names:
+            deltas: list[torch.Tensor] = []
+            weights: list[float] = []
+
+            for payload, weight in zip(layer_payloads, layer_weights):
+                if pname not in payload:
+                    continue
+                deltas.append(payload[pname])
+                weights.append(weight)
+
+            if not deltas:
+                continue
+
+            norms = [float(torch.norm(delta)) for delta in deltas]
+            sorted_norms = sorted(norms)
+            median_norm = sorted_norms[len(sorted_norms) // 2]
+            clip_threshold = 2.5 * median_norm if median_norm > 0 else max(norms)
+
+            acc = torch.zeros_like(deltas[0])
+            denom = 0.0
+
+            for delta, weight, norm in zip(deltas, weights, norms):
+                if clip_threshold > 0.0 and norm > clip_threshold:
+                    scale = clip_threshold / (norm + 1e-12)
+                    delta = delta * scale
+                acc += float(weight) * delta
+                denom += float(weight)
+
+            if denom > 0.0:
+                layer_accum[pname] = acc / denom
 
         if layer_accum:
             out[layer_name] = layer_accum
