@@ -47,26 +47,36 @@ def compute_layer_credit(
     lambda_v: float = 0.0,
 ) -> LayerCreditRecord:
     grad_norm = float(torch.norm(mixed_gradient))
+
     if reference is None or float(torch.norm(reference)) <= 1e-12:
         alignment = 1.0 if grad_norm > 0 else 0.0
     else:
         alignment = safe_cosine(reference, mixed_gradient)
 
-    benefit = float(alignment * np.log1p(grad_norm))
-    risk = float(residual_conflict)
-    probe = float(probe_gain)
+    pos_align = max(0.0, float(alignment))
+    neg_align = max(0.0, -float(alignment))
+
+    benefit = float(pos_align * np.log1p(grad_norm))
+    risk = float(residual_conflict + 0.5 * neg_align)
+    probe = float(np.tanh(5.0 * float(probe_gain)))
+    cost_term = float(np.sqrt(max(float(cost), 0.0)))
 
     credit = float(
         depth_weight
-        * (benefit - float(lambda_r) * risk - float(lambda_c) * float(cost) + float(lambda_v) * probe)
+        * (
+            benefit
+            - float(lambda_r) * risk
+            - float(lambda_c) * cost_term
+            + float(lambda_v) * probe
+        )
     )
 
     return LayerCreditRecord(
         benefit=benefit,
         risk=risk,
-        cost=float(cost),
+        cost=float(cost_term),
         depth_weight=float(depth_weight),
-        credit=credit,
+        credit=float(credit),
         alignment=float(alignment),
         norm=float(grad_norm),
         probe_gain=probe,

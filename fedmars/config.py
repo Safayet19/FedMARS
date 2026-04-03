@@ -66,10 +66,10 @@ class FedMARSConfig:
 
     lambda_r: float = 0.80
     lambda_c: float = 0.10
-    lambda_v: float = 0.35
+    lambda_v: float = 0.80
     
     probe_batch_size: int = 64
-    probe_step: float = 0.05
+    probe_step: float = 0.10
 
     eta_min: float = 0.20
     eta_max: float = 0.90

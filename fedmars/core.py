@@ -65,6 +65,19 @@ def _unflatten_layer_vector(
     return out
 
 
+def _normalize_global_credit(raw_credit: Mapping[str, float]) -> dict[str, float]:
+    if not raw_credit:
+        return {}
+    vals = np.asarray(list(raw_credit.values()), dtype=float)
+    med = float(np.median(vals))
+    mad = float(np.median(np.abs(vals - med))) + 1e-8
+    out: dict[str, float] = {}
+    for name, value in raw_credit.items():
+        z = (float(value) - med) / mad
+        out[name] = float(np.clip(z, -2.5, 2.5))
+    return out
+
+
 class FedMARS:
     def __init__(
         self,
@@ -255,7 +268,7 @@ class FedMARS:
             seed=self.config.random_state + round_idx * 20000 + client_seed,
         )
 
-        lambda_v = float(getattr(self.config, "lambda_v", 0.35))
+        lambda_v = float(getattr(self.config, "lambda_v", 0.8))
 
         credits: dict[str, float] = {}
         details: dict[str, dict[str, Any]] = {}
@@ -419,10 +432,11 @@ class FedMARS:
                 client_credit_dicts.append(credits)
                 client_credit_details[str(client.client_id)] = details
 
-            global_credit = aggregate_global_credit(
+            raw_global_credit = aggregate_global_credit(
                 client_credit_dicts,
                 [spec.name for spec in self.layer_specs],
             )
+            global_credit = _normalize_global_credit(raw_global_credit)
 
             selected_layers = select_layers_under_budget(
                 global_credit=global_credit,
@@ -529,6 +543,7 @@ class FedMARS:
                 "communication_ratio": comm_ratio,
                 "drift": drift,
                 "reward": reward,
+                "raw_global_credit": raw_global_credit,
                 "global_credit": global_credit,
                 "layer_steps": layer_steps,
                 "proximal_strengths": proximal_strengths,
