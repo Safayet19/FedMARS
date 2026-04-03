@@ -6,15 +6,15 @@ from typing import Optional, Tuple
 
 @dataclass(slots=True)
 class ControllerConfig:
-    enabled: bool = True
+    enabled: bool = False
     budget_candidates: Tuple[float, ...] = (0.35, 0.50, 0.70, 1.00)
-    threshold_candidates: Tuple[float, ...] = (-0.50, -0.25, 0.00, 0.25)
-    epsilon: float = 0.12
+    threshold_candidates: Tuple[float, ...] = (-0.05, 0.00, 0.03)
+    epsilon: float = 0.15
     step_size: float = 0.25
-    drift_bins: Tuple[float, ...] = (0.002, 0.01, 0.05, 0.20)
-    comm_bins: Tuple[float, ...] = (0.20, 0.40, 0.60, 0.85)
-    val_delta_bins: Tuple[float, ...] = (-0.02, -0.005, 0.005, 0.02)
-    credit_bins: Tuple[float, ...] = (-1.00, -0.25, 0.25, 1.00)
+    drift_bins: Tuple[float, ...] = (0.02, 0.10, 0.30)
+    comm_bins: Tuple[float, ...] = (0.25, 0.50, 0.75)
+    val_delta_bins: Tuple[float, ...] = (-0.01, 0.00, 0.01)
+    credit_bins: Tuple[float, ...] = (-0.02, 0.00, 0.02)
     reward_comm_penalty: float = 0.08
     reward_drift_penalty: float = 0.03
 
@@ -26,9 +26,9 @@ class AblationConfig:
     use_counterfactual_mixture: bool = True
     use_layer_credit: bool = True
     use_transfer_lr: bool = True
-    use_round_controller: bool = True
+    use_round_controller: bool = False
     use_depth_weight: bool = True
-    use_train_gate: bool = False
+    use_train_gate: bool = True
     use_credit_weighted_aggregation: bool = True
 
 
@@ -38,7 +38,7 @@ class FedMARSConfig:
     device: str = "cpu"
 
     num_rounds: int = 30
-    warmup_rounds: int = 3
+    warmup_rounds: int = 0
     positive_pair_rounds: int = 0
 
     client_fraction: float = 1.0
@@ -51,9 +51,9 @@ class FedMARSConfig:
     max_grad_norm: Optional[float] = 5.0
 
     num_clusters: int = 3
-    num_batches_per_cluster: int = 3
+    num_batches_per_cluster: int = 1
     partition_method: str = "label"
-    cluster_refresh_interval: int = 5
+    cluster_refresh_interval: int = 1
     max_partition_samples: int = 512
     min_examples_for_multimodal: int = 24
 
@@ -69,8 +69,8 @@ class FedMARSConfig:
 
     lambda_r: float = 0.80
     lambda_c: float = 0.10
-    lambda_v: float = 0.00
-    probe_step: float = 0.05
+    lambda_v: float = 0.80
+    probe_step: float = 0.10
 
     eta_min: float = 0.20
     eta_max: float = 0.90
@@ -85,21 +85,21 @@ class FedMARSConfig:
     probe_batch_size: int = 64
     transfer_probe_batches: int = 2
 
-    global_credit_aggregator: str = "median"
-    control_credit_mode: str = "robust_zscore"
+    global_credit_aggregator: str = "clipped_mean"
+    control_credit_mode: str = "none"
     control_credit_clip: float = 2.50
 
-    aggregation: str = "clipped_weighted_mean"
+    aggregation: str = "weighted_mean"
     ensure_nonempty_gate: bool = True
     budget_scale: int = 200
     default_budget_fraction: float = 0.70
-    default_threshold: float = -0.25
+    default_threshold: float = -0.02
 
-    nonselected_lr_scale: float = 0.50
-    nonselected_mu_scale: float = 1.50
-    freeze_unselected_after: int = 999999
+    nonselected_lr_scale: float = 0.15
+    nonselected_mu_scale: float = 2.00
+    freeze_unselected_after: int = 2
 
-    aggregation_momentum: float = 0.00
+    aggregation_momentum: float = 0.90
     weight_decay: float = 1e-4
     label_smoothing: float = 0.0
 
