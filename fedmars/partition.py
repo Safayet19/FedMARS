@@ -14,7 +14,7 @@ from .utils import unpack_batch
 def _tensorize_inputs(dataset, indices: Sequence[int]) -> np.ndarray:
     rows = []
     for idx in indices:
-        x, _ = unpack_batch(dataset[int(idx)])
+        x, _ = unpack_batch(dataset[idx])
         rows.append(torch.as_tensor(x).reshape(-1).float().cpu().numpy())
     return np.stack(rows, axis=0)
 
@@ -24,7 +24,7 @@ def _round_robin_merge(groups: list[list[int]], target_groups: int) -> list[list
     if not groups:
         return []
     if len(groups) <= target_groups:
-        return [sorted(g) for g in groups]
+        return groups
     groups = sorted(groups, key=len, reverse=True)
     merged = [[] for _ in range(target_groups)]
     for idx, group in enumerate(groups):
@@ -83,19 +83,9 @@ def sample_batch_from_indices(dataset, indices: Sequence[int], batch_size: int, 
     return default_collate(batch)
 
 
-def sample_batches_from_indices(dataset, indices: Sequence[int], batch_size: int, num_batches: int, seed_start: int):
-    return [
-        sample_batch_from_indices(dataset=dataset, indices=indices, batch_size=batch_size, seed=seed_start + i)
-        for i in range(num_batches)
-    ]
-
-
-def sample_probe_batches(dataset, batch_size: int, num_batches: int, seed_start: int):
+def sample_probe_batches(dataset, batch_size: int, seed: int):
     all_indices = list(range(len(dataset)))
-    return sample_batches_from_indices(
-        dataset=dataset,
-        indices=all_indices,
-        batch_size=batch_size,
-        num_batches=num_batches,
-        seed_start=seed_start,
+    return (
+        sample_batch_from_indices(dataset, all_indices, batch_size, seed=seed),
+        sample_batch_from_indices(dataset, all_indices, batch_size, seed=seed + 1),
     )
