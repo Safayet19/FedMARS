@@ -1,10 +1,17 @@
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from sklearn.datasets import load_digits
 from sklearn.model_selection import train_test_split
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from fedmars import FedAvg, FedMARS, FedMARSConfig, FedProx, dirichlet_partition
+from fedmars import Ditto, FedAvg, FedDyn, FedMARS, FedMARSConfig, FedOpt, FedProx, QFFL, SCAFFOLD, dirichlet_partition
 
 
 digits = load_digits()
@@ -17,7 +24,6 @@ X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.50, 
 train_dataset = TensorDataset(torch.tensor(X_train), torch.tensor(y_train))
 val_loader = DataLoader(TensorDataset(torch.tensor(X_val), torch.tensor(y_val)), batch_size=256, shuffle=False)
 test_loader = DataLoader(TensorDataset(torch.tensor(X_test), torch.tensor(y_test)), batch_size=256, shuffle=False)
-
 clients = dirichlet_partition(train_dataset, num_clients=10, alpha=0.5, seed=42, min_size=16)
 
 
@@ -42,22 +48,34 @@ config = FedMARSConfig(
     num_clusters=3,
     num_batches_per_cluster=3,
     partition_method="label",
-    default_budget_fraction=0.70,
-    default_threshold=-0.25,
+    default_budget_fraction=1.0,
+    default_threshold=-0.5,
+    warmup_rounds=5,
+    mu_max=0.015,
+    lambda_r=0.18,
+    lambda_c=0.01,
+    lambda_v=0.20,
+    always_include_output_layer=True,
 )
 
-fedmars = FedMARS(make_model(), config)
-fedmars_history = fedmars.fit(clients, server_val_loader=val_loader, server_test_loader=test_loader)
+methods = {
+    "fedmars": FedMARS,
+    "fedavg": FedAvg,
+    "fedprox": FedProx,
+    "fedopt": FedOpt,
+    "scaffold": SCAFFOLD,
+    "feddyn": FedDyn,
+    "qffl": QFFL,
+    "ditto": Ditto,
+}
 
-fedavg = FedAvg(make_model(), config)
-fedavg_history = fedavg.fit(clients, server_val_loader=val_loader, server_test_loader=test_loader)
-
-fedprox = FedProx(make_model(), config)
-fedprox_history = fedprox.fit(clients, server_val_loader=val_loader, server_test_loader=test_loader)
-
-print("FedMARS validation:", fedmars_history["rounds"][-1].get("validation", {}))
-print("FedMARS test:", fedmars_history.get("test", {}))
-print("FedAvg validation:", fedavg_history["rounds"][-1].get("validation", {}))
-print("FedAvg test:", fedavg_history.get("test", {}))
-print("FedProx validation:", fedprox_history["rounds"][-1].get("validation", {}))
-print("FedProx test:", fedprox_history.get("test", {}))
+for name, cls in methods.items():
+    trainer = cls(make_model(), config)
+    history = trainer.fit(clients, server_val_loader=val_loader, server_test_loader=test_loader)
+    last = history["rounds"][-1]
+    print(name, {
+        "val": last.get("validation", {}),
+        "test": history.get("test", {}),
+        "selected_layers": last.get("selected_layers"),
+        "bits": last.get("total_bits"),
+    })

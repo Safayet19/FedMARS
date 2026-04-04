@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fedmars"
-version = "0.2.0"
+version = "0.3.0"
 description = "Reference PyTorch implementation of FedMARS, a credit-driven layer-wise federated learning framework."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,8 +12,11 @@ license = {text = "MIT"}
 authors = [{name = "Safayet Ullah"}]
 dependencies = [
   "numpy>=1.24",
+  "pandas>=2.0",
+  "matplotlib>=3.8",
   "torch>=2.2",
-  "scikit-learn>=1.3"
+  "scikit-learn>=1.3",
+  "ucimlrepo>=0.0.7"
 ]
 keywords = ["federated-learning", "pytorch", "non-iid", "research"]
 classifiers = [

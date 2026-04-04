@@ -2,7 +2,31 @@
 
 FedMARS is a PyTorch reference package for a unified layer-centric federated learning pipeline:
 
-global direction reference -> multi-cluster multi-mini-batch gradients -> counterfactual mixture selection -> benefit-risk-cost-depth credit -> robust global credit aggregation -> tri-control -> transfer-based layer learning rate -> adaptive round controller.
+reference sketch -> repeated cluster mini-batches -> counterfactual mixture selection -> benefit-risk-cost-depth credit -> robust global credit -> tri-control -> transfer-based layer learning rate -> optional round controller.
+
+## What is implemented
+
+Core method:
+
+- FedMARS
+
+Reference baseline implementations included in this repo:
+
+- FedAvg
+- FedProx
+- FedOpt
+- SCAFFOLD
+- FedDyn
+- q-FFL
+- Ditto
+
+Dataset loaders included for the five requested UCI datasets:
+
+- Sonar
+- Optical Recognition of Handwritten Digits
+- Chronic Kidney Disease
+- Predict Students Dropout and Academic Success
+- Breast Cancer Wisconsin Diagnostic
 
 ## Install
 
@@ -10,92 +34,42 @@ global direction reference -> multi-cluster multi-mini-batch gradients -> counte
 pip install -e .
 ```
 
-## Minimal usage
+## Quick check
 
-```python
-import torch
-import torch.nn as nn
-from torch.utils.data import TensorDataset
-
-from fedmars import ClientDataset, FedMARS, FedMARSConfig
-
-model = nn.Sequential(
-    nn.Linear(8, 32),
-    nn.ReLU(),
-    nn.Linear(32, 2),
-)
-
-clients = []
-for cid in range(5):
-    x = torch.randn(100, 8)
-    y = ((x[:, 0] + 0.5 * x[:, 1] - 0.25 * x[:, 2]) > 0).long()
-    clients.append(ClientDataset(client_id=cid, dataset=TensorDataset(x, y)))
-
-config = FedMARSConfig(num_rounds=3, local_epochs=1, local_batch_size=16)
-trainer = FedMARS(model=model, config=config)
-history = trainer.fit(clients)
-print(history["rounds"][-1]["selected_layers"])
+```bash
+pytest -q
+python examples/quickstart_synthetic.py
+python examples/compare_baselines.py
 ```
+
+## Reproducible experiment entry points
+
+- `experiments/run_single.py`: run one method on one dataset
+- `experiments/run_grid.py`: run several methods on one dataset
+- `experiments/sweep_heterogeneity.py`: Dirichlet alpha sweep
+- `experiments/communication_validation.py`: communication-oriented evaluation
+- `experiments/fairness_validation.py`: worst-client and variance evaluation
+- `experiments/personalization_validation.py`: personalized evaluation
+- `experiments/ablation_validation.py`: ablation suite
+- `experiments/runners/`: 40 standardized dataset x method scripts
+- `colab/`: Colab notebooks for training and validation workflows
+
+## Important notes
+
+- The UCI scripts require internet access at runtime because `ucimlrepo` downloads datasets from UCI.
+- The round controller is optional and is **disabled by default** in the main config.
+- The current repo gives a clean, standardized comparison framework for the implemented methods above. It does **not** claim to be an exact official implementation of every literature baseline named in the paper notes.
 
 ## Main package files
 
-- `fedmars/core.py`: full FedMARS training loop and round logging.
-- `fedmars/config.py`: all configuration knobs, controller config, ablation config.
-- `fedmars/credit.py`: reference sketch, layer credit, global credit aggregation, control-credit postprocessing.
-- `fedmars/mixture.py`: counterfactual mixture optimization and conflict computation.
-- `fedmars/partition.py`: local clustering and repeated mini-batch sampling.
-- `fedmars/layers.py`: layer grouping, depth weights, costs, bits, vector utilities.
-- `fedmars/aggregation.py`: budgeted layer selection, sparse aggregation, server momentum, global update.
-- `fedmars/controller.py`: adaptive round controller.
-- `fedmars/baselines.py`: FedAvg and FedProx reference baselines.
-- `fedmars/data.py`: client dataset helpers and Dirichlet partitioning.
-- `fedmars/utils.py`: shared utilities.
-- `examples/`: runnable usage examples.
-- `tests/`: smoke tests for the package.
-
-## Default main-design choices in this implementation
-
-- linear depth weighting,
-- repeated mini-batch gradients inside each client cluster,
-- counterfactual mixture selection on cluster gradients,
-- residual conflict as the risk term,
-- median global credit aggregation,
-- robust-zscore control credit for stable tri-control mapping,
-- transferability from repeated probe-batch gradient agreement,
-- optional adaptive round controller enabled by default,
-- clipped weighted aggregation for sparse server updates.
+- `fedmars/core.py`: FedMARS training loop and round logging
+- `fedmars/config.py`: configuration and ablation controls
+- `fedmars/credit.py`: reference sketch and layer credit logic
+- `fedmars/mixture.py`: counterfactual mixture selection
+- `fedmars/aggregation.py`: budgeted layer selection and sparse aggregation
+- `fedmars/baselines.py`: reference baseline implementations
+- `fedmars/benchmark.py`: UCI dataset loading, preprocessing, experiment runners
 
 ## Logged fields
 
-Each round log contains:
-
-- sampled clients,
-- controller action,
-- selected layers,
-- raw global credit,
-- control credit used for tri-control,
-- layer-wise server step sizes,
-- layer-wise proximal strengths,
-- communication ratio,
-- client-to-server bits,
-- server-to-client bits,
-- total bits,
-- drift,
-- reward,
-- client credit diagnostics,
-- transfer scores,
-- layer learning rates.
-
-## Examples
-
-Run a quick synthetic smoke example:
-
-```bash
-python examples/quickstart_synthetic.py
-```
-
-Run an offline digits comparison:
-
-```bash
-python examples/compare_baselines.py
-```
+Each round log contains selected layers, communication ratio, client-to-server bits, server-to-client bits, total bits, drift, reward, layer credits, layer steps, proximal strengths, client transfer scores, and client layer learning rates.

@@ -8,13 +8,13 @@ from typing import Optional, Tuple
 class ControllerConfig:
     enabled: bool = False
     budget_candidates: Tuple[float, ...] = (0.35, 0.50, 0.70, 1.00)
-    threshold_candidates: Tuple[float, ...] = (-0.05, 0.00, 0.03)
-    epsilon: float = 0.15
-    step_size: float = 0.25
+    threshold_candidates: Tuple[float, ...] = (-0.20, -0.05, 0.00, 0.03)
+    epsilon: float = 0.12
+    step_size: float = 0.20
     drift_bins: Tuple[float, ...] = (0.02, 0.10, 0.30)
     comm_bins: Tuple[float, ...] = (0.25, 0.50, 0.75)
     val_delta_bins: Tuple[float, ...] = (-0.01, 0.00, 0.01)
-    credit_bins: Tuple[float, ...] = (-0.02, 0.00, 0.02)
+    credit_bins: Tuple[float, ...] = (-0.20, 0.00, 0.20)
     reward_comm_penalty: float = 0.08
     reward_drift_penalty: float = 0.03
 
@@ -38,7 +38,7 @@ class FedMARSConfig:
     device: str = "cpu"
 
     num_rounds: int = 30
-    warmup_rounds: int = 0
+    warmup_rounds: int = 3
     positive_pair_rounds: int = 0
 
     client_fraction: float = 1.0
@@ -51,51 +51,57 @@ class FedMARSConfig:
     max_grad_norm: Optional[float] = 5.0
 
     num_clusters: int = 3
+    num_batches_per_cluster: int = 3
+    transfer_probe_batches: int = 3
     partition_method: str = "label"
     cluster_refresh_interval: int = 1
     max_partition_samples: int = 512
     min_examples_for_multimodal: int = 24
 
-    mixture_conflict_beta: float = 0.35
-    mixture_temperature: float = 0.40
+    mixture_conflict_beta: float = 0.20
+    mixture_temperature: float = 0.60
     mixture_resolution: int = 4
+    mixture_steps: int = 40
 
     reference_momentum: float = 0.80
     reference_sketch_mode: str = "ema_unit"
     depth_weight_mode: str = "linear"
 
-    lambda_r: float = 0.80
-    lambda_c: float = 0.10
-    lambda_v: float = 0.80
+    lambda_r: float = 0.35
+    lambda_c: float = 0.02
+    lambda_v: float = 0.30
 
     probe_batch_size: int = 64
-    probe_step: float = 0.10
+    probe_step: float = 0.05
 
-    eta_min: float = 0.20
-    eta_max: float = 0.90
+    eta_min: float = 0.50
+    eta_max: float = 1.00
     mu_min: float = 0.00
-    mu_max: float = 0.08
-    alpha_credit: float = 2.50
+    mu_max: float = 0.03
+    alpha_credit: float = 1.80
 
     rho_min: float = 0.002
     rho_max: float = 0.03
     kappa_transfer: float = 3.0
     tau_transfer: float = 0.10
-    probe_batch_size: int = 64
 
     aggregation: str = "weighted_mean"
     ensure_nonempty_gate: bool = True
+    always_include_output_layer: bool = True
     budget_scale: int = 200
-    default_budget_fraction: float = 0.70
-    default_threshold: float = -0.02
+    default_budget_fraction: float = 1.00
+    default_threshold: float = -0.50
 
-    nonselected_lr_scale: float = 0.15
-    nonselected_mu_scale: float = 2.00
-    freeze_unselected_after: int = 2
+    nonselected_lr_scale: float = 0.40
+    nonselected_mu_scale: float = 1.40
+    freeze_unselected_after: int = 999
 
     aggregation_momentum: float = 0.90
     weight_decay: float = 1e-4
     label_smoothing: float = 0.0
+
+    param_bits: int = 32
+    track_server_to_client_bits: bool = True
 
     controller: ControllerConfig = field(default_factory=ControllerConfig)
     ablations: AblationConfig = field(default_factory=AblationConfig)
