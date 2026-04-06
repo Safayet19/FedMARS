@@ -1,22 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
-
-
-@dataclass(slots=True)
-class ControllerConfig:
-    enabled: bool = False
-    budget_candidates: Tuple[float, ...] = (0.35, 0.50, 0.70, 1.00)
-    threshold_candidates: Tuple[float, ...] = (-0.20, -0.05, 0.00, 0.03)
-    epsilon: float = 0.12
-    step_size: float = 0.20
-    drift_bins: Tuple[float, ...] = (0.02, 0.10, 0.30)
-    comm_bins: Tuple[float, ...] = (0.25, 0.50, 0.75)
-    val_delta_bins: Tuple[float, ...] = (-0.01, 0.00, 0.01)
-    credit_bins: Tuple[float, ...] = (-0.20, 0.00, 0.20)
-    reward_comm_penalty: float = 0.08
-    reward_drift_penalty: float = 0.03
+from typing import Optional
 
 
 @dataclass(slots=True)
@@ -26,7 +11,6 @@ class AblationConfig:
     use_counterfactual_mixture: bool = True
     use_layer_credit: bool = True
     use_transfer_lr: bool = True
-    use_round_controller: bool = True
     use_depth_weight: bool = True
     use_train_gate: bool = True
     use_credit_weighted_aggregation: bool = True
@@ -103,5 +87,4 @@ class FedMARSConfig:
     param_bits: int = 32
     track_server_to_client_bits: bool = True
 
-    controller: ControllerConfig = field(default_factory=ControllerConfig)
     ablations: AblationConfig = field(default_factory=AblationConfig)

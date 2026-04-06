@@ -9,7 +9,6 @@ from torch.utils.data import DataLoader
 
 from .aggregation import aggregate_sparse_updates, apply_global_update, select_layers_under_budget
 from .config import FedMARSConfig
-from .controller import AdaptiveRoundController, ControllerAction, RoundState
 from .credit import aggregate_global_credit, build_reference_sketch, compute_layer_credit
 from .data import ClientDataset, infer_client_weights
 from .layers import LayerSpec, build_layer_specs, compute_depth_weights, compute_layer_bits, compute_layer_costs, flatten_grads_from_model, flatten_params_from_state, layer_name_to_spec, state_delta_by_layer
@@ -57,7 +56,6 @@ class FedMARS:
         self.layer_costs = compute_layer_costs(self.layer_specs)
         self.layer_bits = compute_layer_bits(self.layer_specs, param_bits=self.config.param_bits)
         self.model_bits = int(sum(self.layer_bits.values()))
-        self.controller = AdaptiveRoundController(self.config.controller, seed=self.config.random_state)
         named_params = dict(self.model.named_parameters())
         self.ref_memory = {spec.name: None for spec in self.layer_specs}
         self.server_velocity = {
@@ -255,17 +253,16 @@ class FedMARS:
         client_weight_map = infer_client_weights(clients)
         previous_global_state = None
         previous_val_accuracy = self.evaluate(server_val_loader)["accuracy"] if server_val_loader is not None else 0.0
-        previous_state = RoundState(drift=0.0, communication_ratio=0.0, validation_delta=0.0, credit_mean=0.0)
         for round_idx in range(self.config.num_rounds):
             sampled_clients = self._sample_clients(clients, round_idx)
             global_state = detach_state_dict(self.model)
             ref_sketches = self._build_reference_sketches(global_state, previous_global_state)
             if round_idx < self.config.warmup_rounds:
-                action = ControllerAction(1.0, -1e9, -1)
-            elif self.config.ablations.use_round_controller and self.config.controller.enabled:
-                action = self.controller.choose(previous_state)
+                budget_fraction = 1.0
+                threshold = -1e9
             else:
-                action = ControllerAction(self.config.default_budget_fraction, self.config.default_threshold, -1)
+                budget_fraction = float(self.config.default_budget_fraction)
+                threshold = float(self.config.default_threshold)
             client_credit_dicts = []
             client_credit_details = {}
             for client in sampled_clients:
@@ -278,7 +275,7 @@ class FedMARS:
             if round_idx < self.config.warmup_rounds:
                 selected_layers = [spec.name for spec in self.layer_specs]
             else:
-                selected_layers = select_layers_under_budget(raw_global_credit, self.layer_costs, action.budget_fraction, action.threshold, budget_scale=self.config.budget_scale, ensure_nonempty=self.config.ensure_nonempty_gate, must_include=must_include)
+                selected_layers = select_layers_under_budget(raw_global_credit, self.layer_costs, budget_fraction, threshold, budget_scale=self.config.budget_scale, ensure_nonempty=self.config.ensure_nonempty_gate, must_include=must_include)
             layer_steps = {spec.name: float(self.config.eta_min + (self.config.eta_max - self.config.eta_min) * sigmoid(self.config.alpha_credit * control_credit[spec.name])) for spec in self.layer_specs}
             proximal_strengths = {spec.name: float(self.config.mu_min + (self.config.mu_max - self.config.mu_min) * sigmoid(-self.config.alpha_credit * control_credit[spec.name])) for spec in self.layer_specs}
             client_updates = []
@@ -315,17 +312,11 @@ class FedMARS:
             validation_delta = float(val_metrics["accuracy"] - previous_val_accuracy) if val_metrics is not None else 0.0
             if val_metrics is not None:
                 previous_val_accuracy = float(val_metrics["accuracy"])
-            if self.config.ablations.use_round_controller and self.config.controller.enabled and round_idx >= self.config.warmup_rounds:
-                reward = self.controller.compute_reward(validation_delta, comm_ratio, drift)
-                self.controller.update(previous_state, action, reward)
-            else:
-                reward = validation_delta - self.config.controller.reward_comm_penalty * comm_ratio - self.config.controller.reward_drift_penalty * drift
-            previous_state = RoundState(drift=drift, communication_ratio=comm_ratio, validation_delta=validation_delta, credit_mean=mean_or_zero(list(control_credit.values())))
             previous_global_state = global_state
             round_log = {
                 "round": round_idx,
                 "sampled_clients": [client.client_id for client in sampled_clients],
-                "controller_action": {"budget_fraction": float(action.budget_fraction), "threshold": float(action.threshold), "action_index": int(action.action_index)},
+                "selection_policy": {"budget_fraction": float(budget_fraction), "threshold": float(threshold), "mode": "fixed"},
                 "selected_layers": selected_layers,
                 "selected_layer_ratio": float(len(selected_layers) / max(len(self.layer_specs), 1)),
                 "communication_ratio": comm_ratio,
@@ -333,7 +324,6 @@ class FedMARS:
                 "server_to_client_bits": server_to_client_bits,
                 "total_bits": int(client_to_server_bits + server_to_client_bits),
                 "drift": drift,
-                "reward": reward,
                 "raw_global_credit": raw_global_credit,
                 "control_credit": control_credit,
                 "layer_steps": layer_steps,
