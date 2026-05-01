@@ -21,7 +21,7 @@ class FedMARSConfig:
     random_state: int = 42
     device: str = "cpu"
 
-    num_rounds: int = 30
+    num_rounds: int = 40
     warmup_rounds: int = 3
     positive_pair_rounds: int = 0
 
