@@ -7,31 +7,30 @@ from typing import Optional
 @dataclass(slots=True)
 class FedMARSConfig:
     random_state: int = 42
-    device: str = "cpu"
+    device: str = "auto"
 
-    num_rounds: int = 40
-    warmup_rounds: int = 3
-
-    client_fraction: float = 1.0
-    min_clients_per_round: int = 5
+    num_rounds: int = 200
+    warmup_rounds: int = 5
+    client_fraction: float = 0.10
+    min_clients_per_round: int = 10
 
     local_epochs: int = 2
     local_batch_size: int = 32
-    num_workers: int = 0
-    pin_memory: bool = False
+    num_workers: int = 2
+    pin_memory: bool = True
     max_grad_norm: Optional[float] = 5.0
 
     num_clusters: int = 3
     num_batches_per_cluster: int = 3
     transfer_probe_batches: int = 3
     partition_method: str = "label"
-    max_partition_samples: int = 512
+    max_partition_samples: int = 1024
     min_examples_for_multimodal: int = 24
 
     mixture_conflict_beta: float = 0.20
     mixture_temperature: float = 0.60
     mixture_entropy: float = 0.048
-    mixture_steps: int = 40
+    mixture_steps: int = 50
 
     reference_momentum: float = 0.80
     reference_sketch_mode: str = "ema_unit"
@@ -46,8 +45,10 @@ class FedMARSConfig:
 
     eta_min: float = 0.50
     eta_max: float = 1.00
+
     mu_min: float = 0.00
     mu_max: float = 0.03
+
     alpha_credit: float = 1.80
 
     rho_min: float = 0.002
@@ -65,6 +66,7 @@ class FedMARSConfig:
     aggregation_momentum: float = 0.90
     credit_weight_gamma: float = 1.00
     delta_clip_factor: float = 2.50
+
     weight_decay: float = 1e-4
     label_smoothing: float = 0.0
 
