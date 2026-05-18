@@ -24,7 +24,7 @@ class LayerCreditRecord:
 def build_reference_sketch(previous_layer_vector: torch.Tensor | None, mode: str = "unit") -> torch.Tensor | None:
     if previous_layer_vector is None:
         return None
-    vec = previous_layer_vector.detach().reshape(-1).float().clone()
+    vec = torch.nan_to_num(previous_layer_vector.detach().reshape(-1).float().clone(), nan=0.0, posinf=0.0, neginf=0.0)
     norm = float(torch.norm(vec))
     if norm <= 1e-12:
         return None
@@ -46,41 +46,20 @@ def compute_layer_credit(
     probe_gain: float = 0.0,
     lambda_v: float = 0.0,
 ) -> LayerCreditRecord:
+    mixed_gradient = torch.nan_to_num(mixed_gradient.detach().float(), nan=0.0, posinf=0.0, neginf=0.0)
     grad_norm = float(torch.norm(mixed_gradient))
-
     if reference is None or float(torch.norm(reference)) <= 1e-12:
-        alignment = 1.0 if grad_norm > 0 else 0.0
+        alignment = 0.0
     else:
         alignment = safe_cosine(reference, mixed_gradient)
-
     pos_align = max(0.0, float(alignment))
     neg_align = max(0.0, -float(alignment))
-
     benefit = float(pos_align * np.log1p(grad_norm))
-    risk = float(residual_conflict + 0.5 * neg_align)
+    risk = float(max(float(residual_conflict), 0.0) + 0.5 * neg_align)
     probe = float(np.tanh(5.0 * float(probe_gain)))
     cost_term = float(np.sqrt(max(float(cost), 0.0)))
-
-    credit = float(
-        depth_weight
-        * (
-            benefit
-            - float(lambda_r) * risk
-            - float(lambda_c) * cost_term
-            + float(lambda_v) * probe
-        )
-    )
-
-    return LayerCreditRecord(
-        benefit=benefit,
-        risk=risk,
-        cost=float(cost_term),
-        depth_weight=float(depth_weight),
-        credit=float(credit),
-        alignment=float(alignment),
-        norm=float(grad_norm),
-        probe_gain=probe,
-    )
+    credit = float(depth_weight * (benefit - float(lambda_r) * risk - float(lambda_c) * cost_term + float(lambda_v) * probe))
+    return LayerCreditRecord(benefit, risk, cost_term, float(depth_weight), credit, float(alignment), grad_norm, probe)
 
 
 def aggregate_global_credit(client_credit_dicts: list[Mapping[str, float]], layer_names: list[str]) -> dict[str, float]:

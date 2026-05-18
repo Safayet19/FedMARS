@@ -33,14 +33,12 @@ def select_counterfactual_mixture(
     reference: torch.Tensor | None,
     beta: float,
     temperature: float,
+    entropy_coef: float = 0.048,
     steps: int = 40,
 ) -> tuple[np.ndarray, torch.Tensor, float, float]:
     if len(gradients) == 0:
         raise ValueError("At least one gradient is required.")
-    clean_gradients = []
-    for grad in gradients:
-        g = torch.nan_to_num(grad.detach().clone().float(), nan=0.0, posinf=0.0, neginf=0.0)
-        clean_gradients.append(g)
+    clean_gradients = [torch.nan_to_num(g.detach().clone().float(), nan=0.0, posinf=0.0, neginf=0.0) for g in gradients]
     if len(clean_gradients) == 1:
         only = clean_gradients[0]
         return np.array([1.0], dtype=np.float32), only, 0.0, float(torch.norm(only))
@@ -48,11 +46,11 @@ def select_counterfactual_mixture(
     align_scores = np.zeros(J, dtype=np.float32)
     conflict_matrix = np.zeros((J, J), dtype=np.float32)
     ref = None if reference is None else torch.nan_to_num(reference.detach().clone().float(), nan=0.0, posinf=0.0, neginf=0.0)
-    for i in range(J):
+    for i, grad in enumerate(clean_gradients):
         if ref is None or float(torch.norm(ref)) <= 1e-12:
-            align_scores[i] = float(torch.norm(clean_gradients[i]))
+            align_scores[i] = float(torch.log1p(torch.norm(grad)))
         else:
-            align_scores[i] = safe_cosine(ref, clean_gradients[i]) * float(torch.log1p(torch.norm(clean_gradients[i])))
+            align_scores[i] = safe_cosine(ref, grad) * float(torch.log1p(torch.norm(grad)))
     for i in range(J):
         for j in range(i + 1, J):
             c = 1.0 - safe_cosine(clean_gradients[i], clean_gradients[j])
@@ -60,11 +58,11 @@ def select_counterfactual_mixture(
             conflict_matrix[j, i] = c
     pi = np.full(J, 1.0 / J, dtype=np.float32)
     step_size = max(0.05, 0.35 * float(temperature))
-    entropy_coef = max(0.01, 0.08 * float(temperature))
+    lam_ent = max(0.0, float(entropy_coef))
     for _ in range(max(1, int(steps))):
         conf_grad = conflict_matrix @ pi
         ent_grad = -(np.log(np.clip(pi, 1e-8, 1.0)) + 1.0)
-        grad = np.nan_to_num(align_scores - float(beta) * conf_grad + entropy_coef * ent_grad, nan=0.0, posinf=0.0, neginf=0.0)
+        grad = np.nan_to_num(align_scores - float(beta) * conf_grad + lam_ent * ent_grad, nan=0.0, posinf=0.0, neginf=0.0)
         pi = _project_to_simplex(pi + step_size * grad)
     mixed = sum(float(pi[j]) * clean_gradients[j] for j in range(J))
     mixed = torch.nan_to_num(mixed.detach().clone(), nan=0.0, posinf=0.0, neginf=0.0)
@@ -73,5 +71,5 @@ def select_counterfactual_mixture(
         for j in range(i + 1, J):
             conflict += float(pi[i] * pi[j]) * float(conflict_matrix[i, j])
     entropy = -float(np.sum(pi * np.log(np.clip(pi, 1e-8, 1.0))))
-    objective = float(np.dot(align_scores, pi) - float(beta) * conflict + entropy_coef * entropy)
+    objective = float(np.dot(align_scores, pi) - float(beta) * conflict + lam_ent * entropy)
     return pi.astype(np.float32), mixed, float(conflict), objective
